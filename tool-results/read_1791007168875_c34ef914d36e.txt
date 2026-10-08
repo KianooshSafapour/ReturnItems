@@ -1,0 +1,641 @@
+     1→"use client";
+     2→
+     3→// رسید چاپی مرجوعی — دو قالب: برگه A4 و نوار حرارتی ۸۰ میلی‌متری — هر دو با بارکدهای واقعی قابل اسکن (JsBarcode)
+     4→// چاپ از طریق window.print() با استایل اختصاصی @media print در globals.css
+     5→// قالب حرارتی: @page 80mm از طریق تگ <style> داینامیک (وقتی انتخاب شده باشد)
+     6→import { useEffect, useRef, useState } from "react";
+     7→import JsBarcode from "jsbarcode";
+     8→import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+     9→import { Button } from "@/components/ui/button";
+    10→import { Loader2, Printer, X, Leaf, CheckCircle2, Hourglass, FileDown, FileText, Receipt, Scissors } from "lucide-react";
+    11→import { BrandEmblem } from "./ornaments";
+    12→import { formatMoney, formatCardNumber, moneyWords, toFaDigits } from "@/lib/money";
+    13→import { formatJalaliFull, formatJalaliDate } from "@/lib/jalali";
+    14→import { isValidEan13 } from "@/lib/barcode";
+    15→import { SETTLEMENT_META, DEFAULT_SETTINGS } from "./types";
+    16→import type { ReturnDetailDTO, StoreSettings } from "./types";
+    17→
+    18→/* ---------- بارکد SVG (EAN-13 استاندارد یا CODE128 برای سایر مقادیر) ---------- */
+    19→function BarcodeSvg({
+    20→  value,
+    21→  height = 30,
+    22→  width = 1.6,
+    23→  fontSize = 12,
+    24→  className = "",
+    25→}: {
+    26→  value: string;
+    27→  height?: number;
+    28→  width?: number;
+    29→  fontSize?: number;
+    30→  className?: string;
+    31→}) {
+    32→  const ref = useRef<SVGSVGElement>(null);
+    33→
+    34→  useEffect(() => {
+    35→    if (!ref.current || !value) return;
+    36→    const isEan13 = /^\d{13}$/.test(value) && isValidEan13(value);
+    37→    try {
+    38→      JsBarcode(ref.current, value, {
+    39→        format: isEan13 ? "EAN13" : "CODE128",
+    40→        height,
+    41→        width,
+    42→        fontSize,
+    43→        margin: 2,
+    44→        lineColor: "#111111",
+    45→        background: "transparent",
+    46→        displayValue: true,
+    47→        font: "monospace",
+    48→        fontOptions: "bold",
+    49→        textAlign: "center",
+    50→        textPosition: "bottom",
+    51→        textMargin: 1,
+    52→      });
+    53→    } catch {
+    54→      // مقدار نامعتبر برای بارکد → نمایش متن خام
+    55→      if (ref.current) ref.current.innerHTML = "";
+    56→    }
+    57→  }, [value, height, width, fontSize]);
+    58→
+    59→  return <svg ref={ref} className={className} aria-label={`بارکد ${value}`} />;
+    60→}
+    61→
+    62→/* ---------- ردیف اطلاعات ---------- */
+    63→function Field({ label, value, ltr = false, strong = false }: { label: string; value: string; ltr?: boolean; strong?: boolean }) {
+    64→  return (
+    65→    <div className="flex items-baseline gap-1.5 py-0.5">
+    66→      <span className="text-[10px] text-neutral-500 shrink-0">{label}:</span>
+    67→      <span
+    68→        dir={ltr ? "ltr" : undefined}
+    69→        className={`text-[11px] leading-5 ${strong ? "font-bold" : "font-medium"} text-neutral-900 ${ltr ? "text-left" : ""}`}
+    70→      >
+    71→        {value}
+    72→      </span>
+    73→    </div>
+    74→  );
+    75→}
+    76→
+    77→/* ---------- ردیف فشرده رسید حرارتی ---------- */
+    78→function TRow({ label, value, num = false }: { label: string; value: string; num?: boolean }) {
+    79→  return (
+    80→    <div className="flex items-baseline justify-between gap-2 py-[1px]">
+    81→      <span className="text-[9px] text-neutral-600 shrink-0">{label}</span>
+    82→      <span className={`text-[10px] font-semibold text-neutral-900 text-left min-w-0 ${num ? "num" : ""}`}>{value}</span>
+    83→    </div>
+    84→  );
+    85→}
+    86→
+    87→/* ---------- رسید حرارتی ۸۰ میلی‌متری (چاپگر کارت‌خوان صندوق) ---------- */
+    88→function ThermalReceipt({
+    89→  detail,
+    90→  settlement,
+    91→  words,
+    92→  settings,
+    93→  paid,
+    94→}: {
+    95→  detail: ReturnDetailDTO;
+    96→  settlement: { T: number; E: number; X: number; debt: number; credit: number } | null;
+    97→  words: { rial: string; toman: string };
+    98→  settings: StoreSettings;
+    99→  paid: boolean;
+   100→}) {
+   101→  return (
+   102→    <div className="thermal-shell mx-auto w-[302px]">
+   103→      {/* لبه‌های دندانه‌دار کاغذ — فقط در پیش‌نمایش صفحه */}
+   104→      <div className="thermal-edge-t no-print" aria-hidden="true" />
+   105→      <div className="receipt-print-area thermal-paper bg-white text-neutral-900 px-4 py-4 shadow-xl select-none">
+   106→        {/* سربرگ فروشگاه */}
+   107→        <div className="text-center">
+   108→          <div className="flex justify-center">
+   109→            <BrandEmblem size={44} />
+   110→          </div>
+   111→          <h2 className="mt-1.5 text-[15px] font-extrabold leading-6">{settings.storeName}</h2>
+   112→          <p className="text-[9px] text-neutral-600 leading-4">{settings.storeCity}</p>
+   113→          {settings.storePhone && (
+   114→            <p className="text-[9px] text-neutral-600 leading-4 num" dir="ltr">
+   115→              {settings.storePhone}
+   116→            </p>
+   117→          )}
+   118→        </div>
+   119→
+   120→        <div className="my-2.5 border-t border-dashed border-neutral-400" />
+   121→
+   122→        {/* عنوان و وضعیت */}
+   123→        <div className="text-center space-y-1">
+   124→          <p className="text-[11px] font-extrabold">رسید ثبت مرجوعی کالا</p>
+   125→          {paid ? (
+   126→            <span className="inline-flex items-center gap-1 border border-neutral-900 px-2 py-0.5 rounded text-[8px] font-bold">
+   127→              <CheckCircle2 className="size-2.5" />
+   128→              تسویه‌شده (پرداخت/بایگانی)
+   129→            </span>
+   130→          ) : (
+   131→            <span className="inline-flex items-center gap-1 border-2 border-neutral-900 px-2 py-0.5 rounded text-[8px] font-extrabold">
+   132→              <Hourglass className="size-2.5" />
+   133→              در انتظار انتقال وجه
+   134→            </span>
+   135→          )}
+   136→        </div>
+   137→
+   138→        <div className="my-2.5 border-t border-dashed border-neutral-400" />
+   139→
+   140→        {/* شماره پیگیری + بارکد */}
+   141→        <div className="text-center">
+   142→          <p className="text-[8px] text-neutral-600">شماره پیگیری مرجوعی</p>
+   143→          <p className="num text-[12px] font-extrabold tracking-wide" dir="ltr">
+   144→            {detail.code}
+   145→          </p>
+   146→          <div className="mt-1 flex justify-center">
+   147→            <BarcodeSvg value={detail.code} height={26} width={1.0} fontSize={9} />
+   148→          </div>
+   149→        </div>
+   150→
+   151→        <div className="my-2.5 border-t border-dashed border-neutral-400" />
+   152→
+   153→        {/* اطلاعات مشتری و ثبت */}
+   154→        <div className="space-y-0.5">
+   155→          <TRow label="مشتری" value={detail.customerName} />
+   156→          <TRow label="موبایل" value={detail.customerPhone} num />
+   157→          <TRow label="زمان خرید" value={formatJalaliDate(new Date(detail.purchaseAt))} num />
+   158→          <TRow label="صندوقدار" value={detail.cashier.fullName} />
+   159→          <TRow label="زمان ثبت" value={formatJalaliFull(new Date(detail.submittedAt))} num />
+   160→          <TRow label="دلیل" value={detail.reason} />
+   161→        </div>
+   162→
+   163→        <div className="my-2.5 border-t border-dashed border-neutral-400" />
+   164→
+   165→        {/* اقلام + بارکد هر قلم */}
+   166→        <p className="text-[10px] font-extrabold mb-1.5">
+   167→          اقلام مرجوعی ({detail.items.length} قلم)
+   168→        </p>
+   169→        <div className="space-y-1.5">
+   170→          {detail.items.map((it, i) => (
+   171→            <div key={it.id} className="border-b border-dotted border-neutral-300 pb-1.5 last:border-b-0 last:pb-0">
+   172→              <div className="flex items-baseline justify-between gap-2">
+   173→                <p className="text-[10px] font-bold leading-4 flex-1 min-w-0">
+   174→                  <span className="num">{toFaDigits(i + 1)}.</span> {it.name}
+   175→                </p>
+   176→                <p className="text-[9px] num shrink-0" dir="ltr">
+   177→                  ×{toFaDigits(it.quantity)}
+   178→                </p>
+   179→              </div>
+   180→              {it.barcode && (
+   181→                <div className="flex justify-center my-1">
+   182→                  <BarcodeSvg value={it.barcode} height={16} width={1.0} fontSize={8} />
+   183→                </div>
+   184→              )}
+   185→              <div className="flex items-baseline justify-between gap-2">
+   186→                <span className="text-[9px] num text-neutral-600">{formatMoney(it.unitPrice)} ریال</span>
+   187→                <span className="text-[10px] num font-extrabold">{formatMoney(it.lineTotal)}</span>
+   188→              </div>
+   189→            </div>
+   190→          ))}
+   191→        </div>
+   192→
+   193→        <div className="my-2.5 border-t border-dashed border-neutral-400" />
+   194→
+   195→        {/* تسویه */}
+   196→        <div className="space-y-0.5">
+   197→          <TRow label="جمع اقلام" value={`${formatMoney(detail.totalAmount)} ریال`} num />
+   198→          {settlement && settlement.E > 0 && (
+   199→            <TRow label="کالای جایگزین (−)" value={`${formatMoney(settlement.E)} ریال`} num />
+   200→          )}
+   201→          {settlement && settlement.debt > 0 && (
+   202→            <TRow label="بدهی مشتری" value={`${formatMoney(settlement.debt)} ریال`} num />
+   203→          )}
+   204→          {settlement && settlement.credit > 0 && (
+   205→            <TRow label="اعتبار مشتری" value={`${formatMoney(settlement.credit)} ریال`} num />
+   206→          )}
+   207→          {detail.transferNote && (
+   208→            <p className="text-[8px] leading-4 text-neutral-700 pt-1 text-justify">
+   209→              <span className="font-bold">دلیل اختلاف: </span>
+   210→              {detail.transferNote}
+   211→            </p>
+   212→          )}
+   213→        </div>
+   214→
+   215→        {/* مبلغ نهایی — قاب دوبل کلاسیک */}
+   216→        <div className="mt-2 border-y-2 border-double border-neutral-900 py-1.5 text-center">
+   217→          <p className="text-[8px] font-bold text-neutral-600">{paid ? "مبلغ انتقالی نهایی" : "مبلغ قابل انتقال"}</p>
+   218→          <p className="num text-[14px] font-extrabold leading-6">
+   219→            {formatMoney(detail.transferAmount)} <span className="text-[8px] font-bold">ریال</span>
+   220→          </p>
+   221→          <p className="text-[7px] text-neutral-600 leading-3.5 mt-0.5">{words.toman}</p>
+   222→        </div>
+   223→
+   224→        {/* اطلاعات بازگشت وجه */}
+   225→        {paid && detail.payment ? (
+   226→          <div className="mt-2 space-y-0.5">
+   227→            <p className="text-[9px] font-extrabold mb-0.5">بازگشت وجه</p>
+   228→            <TRow label="بانک مبدأ" value={detail.payment.bankName} />
+   229→            {detail.payment.referenceNumber && (
+   230→              <TRow label="پیگیری" value={detail.payment.referenceNumber} num />
+   231→            )}
+   232→            {detail.payment.cardNumber && (
+   233→              <TRow label="کارت مبدأ" value={formatCardNumber(detail.payment.cardNumber)} num />
+   234→            )}
+   235→            <TRow label="زمان انتقال" value={formatJalaliFull(new Date(detail.payment.transferredAt))} num />
+   236→            <TRow label="ثبت‌کننده" value={detail.payment.recordedBy.fullName} />
+   237→          </div>
+   238→        ) : (
+   239→          <p className="mt-2 text-[8px] leading-4 text-neutral-700 text-justify">
+   240→            وجه این مرجوعی هنوز منتقل نشده است — پس از تأیید مدیریت ({settings.managerName}) به کارت بانکی مشتری
+   241→            واریز می‌شود.
+   242→          </p>
+   243→        )}
+   244→
+   245→        {/* امضا */}
+   246→        <div className="mt-3 pt-2 border-t border-dashed border-neutral-400">
+   247→          <div className="flex items-end justify-center gap-1.5">
+   248→            <span className="text-[8px] text-neutral-600">امضای مشتری:</span>
+   249→            <span className="border-b border-dotted border-neutral-500 w-28 inline-block" style={{ height: 14 }} />
+   250→          </div>
+   251→        </div>
+   252→
+   253→        {/* پابرگ */}
+   254→        <div className="mt-3 pt-2 border-t border-neutral-300 text-center space-y-0.5">
+   255→          <p className="text-[9px] font-semibold leading-4">{settings.receiptFooter}</p>
+   256→          <p className="text-[7px] text-neutral-500 leading-3.5 flex items-center justify-center gap-1 flex-wrap">
+   257→            <Leaf className="size-2 inline" aria-hidden="true" />
+   258→            توسعه‌دهنده سامانه: {settings.developerCredit}
+   259→            <span className="mx-0.5">—</span>
+   260→            <span className="num">چاپ: {formatJalaliFull(new Date())}</span>
+   261→          </p>
+   262→        </div>
+   263→
+   264→        {/* نشان برش */}
+   265→        <div className="mt-2 border-t border-dashed border-neutral-400 pt-1 text-center">
+   266→          <span className="text-[7px] text-neutral-500 inline-flex items-center gap-1">
+   267→            <Scissors className="size-2.5" aria-hidden="true" />
+   268→            - - - - - - - - - - - - - -
+   269→          </span>
+   270→        </div>
+   271→      </div>
+   272→      <div className="thermal-edge-b no-print" aria-hidden="true" />
+   273→    </div>
+   274→  );
+   275→}
+   276→
+   277→/* ---------- دیالوگ رسید ---------- */
+   278→export function ReceiptDialog({
+   279→  open,
+   280→  onOpenChange,
+   281→  detail,
+   282→}: {
+   283→  open: boolean;
+   284→  onOpenChange: (o: boolean) => void;
+   285→  detail: ReturnDetailDTO | null;
+   286→}) {
+   287→  const [settings, setSettings] = useState<StoreSettings>(DEFAULT_SETTINGS);
+   288→  // قالب چاپ: برگه A4 یا نوار حرارتی ۸۰ میلی‌متری — انتخاب آخرین بار ذخیره می‌شود
+   289→  const [format, setFormat] = useState<"a4" | "thermal">(() => {
+   290→    if (typeof window === "undefined") return "a4";
+   291→    try {
+   292→      return window.localStorage.getItem("hz:receipt-format") === "thermal" ? "thermal" : "a4";
+   293→    } catch {
+   294→      return "a4";
+   295→    }
+   296→  });
+   297→
+   298→  function chooseFormat(f: "a4" | "thermal") {
+   299→    setFormat(f);
+   300→    try {
+   301→      window.localStorage.setItem("hz:receipt-format", f);
+   302→    } catch {
+   303→      /* حافظه در دسترس نیست */
+   304→    }
+   305→  }
+   306→
+   307→  // تنظیمات فروشگاه برای سربرگ/پابرگ رسید
+   308→  useEffect(() => {
+   309→    if (!open) return;
+   310→    let cancelled = false;
+   311→    fetch("/api/admin/settings")
+   312→      .then((r) => (r.ok ? r.json() : null))
+   313→      .then((d) => {
+   314→        if (!cancelled && d && typeof d === "object") setSettings({ ...DEFAULT_SETTINGS, ...d });
+   315→      })
+   316→      .catch(() => {});
+   317→    return () => {
+   318→      cancelled = true;
+   319→    };
+   320→  }, [open]);
+   321→
+   322→  const paid = detail?.status === "paid";
+   323→  const settlement =
+   324→    detail && (detail.transferAmount !== detail.totalAmount || detail.exchangeValue > 0)
+   325→      ? {
+   326→          T: detail.totalAmount,
+   327→          E: detail.exchangeValue,
+   328→          X: detail.transferAmount,
+   329→          debt: detail.exchangeValue > detail.totalAmount ? detail.exchangeValue - detail.totalAmount : 0,
+   330→          credit:
+   331→            detail.transferAmount + detail.exchangeValue < detail.totalAmount
+   332→              ? detail.totalAmount - detail.exchangeValue - detail.transferAmount
+   333→              : 0,
+   334→        }
+   335→      : null;
+   336→
+   337→  function handlePrint() {
+   338→    window.print();
+   339→  }
+   340→
+   341→  if (!detail) return null;
+   342→  const words = moneyWords(detail.transferAmount);
+   343→
+   344→  return (
+   345→    <Dialog open={open} onOpenChange={onOpenChange}>
+   346→      <DialogContent className="receipt-dialog-content w-[calc(100vw-1.5rem)] sm:max-w-4xl max-h-[calc(100dvh-2rem)] overflow-y-auto overflow-x-hidden p-0 gap-0 bg-neutral-100 dark:bg-neutral-200">
+   347→        <DialogTitle className="sr-only">رسید مرجوعی {detail.code}</DialogTitle>
+   348→        <DialogDescription className="sr-only">
+   349→          پیش‌نمایش برگه چاپی مرجوعی {detail.code} — قابل چاپ با بارکدهای قابل اسکن
+   350→        </DialogDescription>
+   351→
+   352→        {/* قالب حرارتی: اندازهٔ صفحهٔ چاپ ۸۰×۳۲۷ میلی‌متر (نوار پیوسته بلند) — این تگ بعد از globals.css می‌آید و برنده می‌شود */}
+   353→        {format === "thermal" && (
+   354→          <style>{"@media print { @page { size: 80mm 327mm; margin: 2mm; } }"}</style>
+   355→        )}
+   356→
+   357→        {/* نوار ابزار (چاپ نمی‌شود) */}
+   358→        <div className="no-print sticky top-0 z-10 flex flex-wrap items-center gap-2 px-4 py-3 bg-neutral-800 text-white border-b border-neutral-700">
+   359→          <Printer className="size-4 text-chart-2 shrink-0" />
+   360→          <p className="text-xs font-bold flex-1 min-w-0">
+   361→            {format === "a4"
+   362→              ? "پیش‌نمایش رسید — برگه A4 با بارکدهای قابل اسکن"
+   363→              : "پیش‌نمایش رسید — نوار حرارتی ۸۰ میلی‌متری"}
+   364→          </p>
+   365→          {/* انتخاب قالب چاپ */}
+   366→          <div
+   367→            className="flex rounded-lg bg-neutral-900/70 p-0.5 border border-neutral-700"
+   368→            role="group"
+   369→            aria-label="انتخاب قالب چاپ"
+   370→          >
+   371→            <button
+   372→              type="button"
+   373→              onClick={() => chooseFormat("a4")}
+   374→              aria-pressed={format === "a4"}
+   375→              className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[11px] font-bold transition-colors h-9 ${
+   376→                format === "a4" ? "bg-chart-2 text-neutral-900" : "text-neutral-400 hover:text-white"
+   377→              }`}
+   378→            >
+   379→              <FileText className="size-3.5" />
+   380→              برگه A4
+   381→            </button>
+   382→            <button
+   383→              type="button"
+   384→              onClick={() => chooseFormat("thermal")}
+   385→              aria-pressed={format === "thermal"}
+   386→              className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[11px] font-bold transition-colors h-9 ${
+   387→                format === "thermal" ? "bg-chart-2 text-neutral-900" : "text-neutral-400 hover:text-white"
+   388→              }`}
+   389→            >
+   390→              <Receipt className="size-3.5" />
+   391→              حرارتی ۸۰mm
+   392→            </button>
+   393→          </div>
+   394→          <Button size="sm" className="h-9 gap-1.5 font-bold active:scale-95 transition-transform" onClick={handlePrint}>
+   395→            <Printer className="size-4" />
+   396→            چاپ رسید
+   397→          </Button>
+   398→          <Button
+   399→            size="sm"
+   400→            variant="ghost"
+   401→            className="h-9 gap-1.5 text-neutral-300 hover:text-white hover:bg-neutral-700"
+   402→            onClick={() => onOpenChange(false)}
+   403→          >
+   404→            <X className="size-4" />
+   405→            بستن
+   406→          </Button>
+   407→        </div>
+   408→
+   409→        {/* ---------- برگه رسید (ناحیه چاپ) ---------- */}
+   410→        <div className="receipt-paper-wrap p-3 sm:p-5">
+   411→          {format === "a4" ? (
+   412→          <div className="receipt-print-area mx-auto bg-white text-neutral-900 shadow-xl rounded-sm border border-neutral-200 max-w-[190mm] px-6 sm:px-10 py-8 select-none">
+   413→            {/* سربرگ */}
+   414→            <div className="flex items-start justify-between gap-4 border-b-2 border-neutral-900 pb-4">
+   415→              <div className="flex items-center gap-3 min-w-0">
+   416→                <BrandEmblem size={52} className="shrink-0" />
+   417→                <div className="min-w-0">
+   418→                  <h2 className="text-xl font-extrabold leading-7 text-neutral-900 truncate">{settings.storeName}</h2>
+   419→                  <p className="text-[10px] text-neutral-600 leading-4">{settings.storeCity}</p>
+   420→                  {settings.storePhone && (
+   421→                    <p className="text-[10px] text-neutral-600 leading-4 num" dir="ltr">
+   422→                      {settings.storePhone}
+   423→                    </p>
+   424→                  )}
+   425→                </div>
+   426→              </div>
+   427→              <div className="text-center shrink-0">
+   428→                <p className="text-[10px] text-neutral-500 tracking-wide">شماره پیگیری مرجوعی</p>
+   429→                <p className="text-lg font-extrabold text-neutral-900 num tracking-wide" dir="ltr">
+   430→                  {detail.code}
+   431→                </p>
+   432→                <div className="mt-1 flex justify-center">
+   433→                  <BarcodeSvg value={detail.code} height={34} width={1.5} fontSize={11} />
+   434→                </div>
+   435→              </div>
+   436→            </div>
+   437→
+   438→            {/* عنوان و وضعیت */}
+   439→            <div className="flex items-center justify-between gap-3 py-3 border-b border-dashed border-neutral-300">
+   440→              <h3 className="text-base font-extrabold text-neutral-900">رسید ثبت مرجوعی کالا</h3>
+   441→              <div className="flex items-center gap-2 text-[10px] font-bold">
+   442→                {paid ? (
+   443→                  <span className="inline-flex items-center gap-1 border border-neutral-900 px-2 py-0.5 rounded">
+   444→                    <CheckCircle2 className="size-3" />
+   445→                    تسویه‌شده (پرداخت/بایگانی)
+   446→                  </span>
+   447→                ) : (
+   448→                  <span className="inline-flex items-center gap-1 border-2 border-neutral-900 px-2 py-0.5 rounded">
+   449→                    <Hourglass className="size-3" />
+   450→                    در انتظار انتقال وجه
+   451→                  </span>
+   452→                )}
+   453→              </div>
+   454→            </div>
+   455→
+   456→            {/* اطلاعات مشتری و ثبت */}
+   457→            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 py-3 border-b border-dashed border-neutral-300">
+   458→              <div>
+   459→                <p className="text-[11px] font-extrabold border-b border-neutral-300 pb-1 mb-1.5">مشخصات مشتری</p>
+   460→                <Field label="نام و نام خانوادگی" value={detail.customerName} strong />
+   461→                <Field label="موبایل" value={detail.customerPhone} ltr />
+   462→                <Field label="کارت بانکی" value={formatCardNumber(detail.customerCardNumber)} ltr />
+   463→                <Field label="زمان خرید" value={formatJalaliDate(new Date(detail.purchaseAt))} />
+   464→              </div>
+   465→              <div>
+   466→                <p className="text-[11px] font-extrabold border-b border-neutral-300 pb-1 mb-1.5">اطلاعات ثبت</p>
+   467→                <Field label="صندوقدار ثبت‌کننده" value={detail.cashier.fullName} strong />
+   468→                <Field label="زمان ثبت" value={formatJalaliFull(new Date(detail.submittedAt))} />
+   469→                <Field label="دلیل مرجوعی" value={detail.reason} />
+   470→                {detail.note && <Field label="توضیحات" value={detail.note} />}
+   471→              </div>
+   472→            </div>
+   473→
+   474→            {/* اقلام + بارکد */}
+   475→            <div className="py-3">
+   476→              <p className="text-[11px] font-extrabold border-b border-neutral-300 pb-1 mb-2">
+   477→                اقلام مرجوعی ({detail.items.length} قلم)
+   478→              </p>
+   479→              <table className="w-full text-[10px] border-collapse">
+   480→                <thead>
+   481→                  <tr className="bg-neutral-100 text-neutral-700">
+   482→                    <th className="border border-neutral-300 px-1.5 py-1.5 w-7 font-bold">#</th>
+   483→                    <th className="border border-neutral-300 px-1.5 py-1.5 font-bold text-right">نام کالا</th>
+   484→                    <th className="border border-neutral-300 px-1.5 py-1.5 w-20 font-bold">کد</th>
+   485→                    <th className="border border-neutral-300 px-1.5 py-1.5 w-36 font-bold">بارکد</th>
+   486→                    <th className="border border-neutral-300 px-1.5 py-1.5 w-10 font-bold">تعداد</th>
+   487→                    <th className="border border-neutral-300 px-1.5 py-1.5 w-24 font-bold">قیمت واحد (ریال)</th>
+   488→                    <th className="border border-neutral-300 px-1.5 py-1.5 w-24 font-bold">مبلغ کل (ریال)</th>
+   489→                  </tr>
+   490→                </thead>
+   491→                <tbody>
+   492→                  {detail.items.map((it, i) => (
+   493→                    <tr key={it.id} className={i % 2 === 1 ? "bg-neutral-50" : ""}>
+   494→                      <td className="border border-neutral-300 px-1.5 py-2 text-center num">{i + 1}</td>
+   495→                      <td className="border border-neutral-300 px-1.5 py-2 font-semibold leading-4">{it.name}</td>
+   496→                      <td className="border border-neutral-300 px-1.5 py-2 text-center num" dir="ltr">
+   497→                        {it.code || "—"}
+   498→                      </td>
+   499→                      <td className="border border-neutral-300 px-1.5 py-1.5">
+   500→                        <div className="flex items-center justify-center min-h-8">
+   501→                          {it.barcode ? (
+   502→                            <BarcodeSvg value={it.barcode} height={22} width={1.1} fontSize={9} />
+   503→                          ) : (
+   504→                            <span className="text-neutral-400">—</span>
+   505→                          )}
+   506→                        </div>
+   507→                      </td>
+   508→                      <td className="border border-neutral-300 px-1.5 py-2 text-center num font-bold">{it.quantity}</td>
+   509→                      <td className="border border-neutral-300 px-1.5 py-2 text-center num">{formatMoney(it.unitPrice)}</td>
+   510→                      <td className="border border-neutral-300 px-1.5 py-2 text-center num font-bold">{formatMoney(it.lineTotal)}</td>
+   511→                    </tr>
+   512→                  ))}
+   513→                </tbody>
+   514→              </table>
+   515→            </div>
+   516→
+   517→            {/* تسویه با مشتری */}
+   518→            <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-4 items-start">
+   519→              <div className="space-y-2.5">
+   520→                {settlement ? (
+   521→                  <div className="border border-neutral-400 rounded p-3">
+   522→                    <p className="text-[11px] font-extrabold border-b border-neutral-300 pb-1 mb-1.5 flex items-center justify-between">
+   523→                      <span>تسویه با مشتری ({SETTLEMENT_META[detail.settlementType]?.label ?? detail.settlementType})</span>
+   524→                    </p>
+   525→                    <Field label="جمع کل اقلام" value={`${formatMoney(settlement.T)} ریال`} />
+   526→                    {settlement.E > 0 && (
+   527→                      <Field label="ارزش کالای جایگزین (−)" value={`${formatMoney(settlement.E)} ریال`} />
+   528→                    )}
+   529→                    <Field label="مبلغ قابل انتقال به حساب مشتری" value={`${formatMoney(settlement.X)} ریال`} strong />
+   530→                    {settlement.debt > 0 && (
+   531→                      <Field label="بدهی مشتری به فروشگاه" value={`${formatMoney(settlement.debt)} ریال`} strong />
+   532→                    )}
+   533→                    {settlement.credit > 0 && (
+   534→                      <Field label="اعتبار باقی‌مانده مشتری" value={`${formatMoney(settlement.credit)} ریال`} />
+   535→                    )}
+   536→                    {detail.transferNote && (
+   537→                      <p className="mt-2 pt-2 border-t border-dashed border-neutral-300 text-[10px] leading-5">
+   538→                        <span className="font-bold">دلیل اختلاف: </span>
+   539→                        {detail.transferNote}
+   540→                      </p>
+   541→                    )}
+   542→                  </div>
+   543→                ) : (
+   544→                  <div className="border border-neutral-300 rounded p-3">
+   545→                    <Field label="تسویه" value="انتقال کامل وجه به حساب مشتری" />
+   546→                  </div>
+   547→                )}
+   548→
+   549→                {/* اطلاعات پرداخت */}
+   550→                <div className="border border-neutral-400 rounded p-3">
+   551→                  <p className="text-[11px] font-extrabold border-b border-neutral-300 pb-1 mb-1.5">اطلاعات بازگشت وجه</p>
+   552→                  {paid && detail.payment ? (
+   553→                    <>
+   554→                      <Field label="وضعیت" value="تسویه و بایگانی شد" strong />
+   555→                      <Field label="بانک" value={detail.payment.bankName} />
+   556→                      {detail.payment.referenceNumber && (
+   557→                        <Field label="شماره پیگیری انتقال" value={detail.payment.referenceNumber} ltr />
+   558→                      )}
+   559→                      {detail.payment.accountNumber && (
+   560→                        <Field label="شماره حساب مبدأ" value={detail.payment.accountNumber} ltr />
+   561→                      )}
+   562→                      {detail.payment.cardNumber && (
+   563→                        <Field label="کارت مبدأ" value={formatCardNumber(detail.payment.cardNumber)} ltr />
+   564→                      )}
+   565→                      <Field label="زمان انتقال/تسویه" value={formatJalaliFull(new Date(detail.payment.transferredAt))} />
+   566→                      <Field label="ثبت‌کننده" value={detail.payment.recordedBy.fullName} />
+   567→                    </>
+   568→                  ) : (
+   569→                    <p className="text-[10px] leading-5 text-neutral-700">
+   570→                      وجه این مرجوعی هنوز منتقل نشده است — پس از تأیید مدیریت ({settings.managerName})، مبلغ
+   571→                      قابل انتقال به کارت بانکی مشتری واریز می‌شود.
+   572→                    </p>
+   573→                  )}
+   574→                </div>
+   575→              </div>
+   576→
+   577→              {/* مبلغ نهایی */}
+   578→              <div className="sm:w-56 border-2 border-neutral-900 rounded p-4 text-center">
+   579→                <p className="text-[10px] font-bold text-neutral-600 mb-1">
+   580→                  {paid ? "مبلغ انتقالی نهایی" : "مبلغ قابل انتقال"}
+   581→                </p>
+   582→                <p className="text-xl font-extrabold num text-neutral-900 leading-8">
+   583→                  {formatMoney(detail.transferAmount)}
+   584→                </p>
+   585→                <p className="text-[10px] text-neutral-600 num mb-1">ریال</p>
+   586→                <p className="text-[9px] text-neutral-500 leading-4 border-t border-dashed border-neutral-300 pt-1.5">
+   587→                  {words.rial}
+   588→                  <br />
+   589→                  {words.toman}
+   590→                </p>
+   591→              </div>
+   592→            </div>
+   593→
+   594→            {/* امضاها */}
+   595→            <div className="grid grid-cols-3 gap-6 mt-8 pt-2">
+   596→              {["امضای مشتری", "امضای صندوقدار", `تأیید ${settings.managerName}`].map((s) => (
+   597→                <div key={s} className="text-center">
+   598→                  <div className="border-t border-dotted border-neutral-500 pt-1.5 mx-3" style={{ height: 34 }} />
+   599→                  <p className="text-[9px] text-neutral-600">{s}</p>
+   600→                </div>
+   601→              ))}
+   602→            </div>
+   603→
+   604→            {/* پابرگ */}
+   605→            <div className="mt-6 pt-3 border-t border-neutral-300 text-center space-y-1">
+   606→              <p className="text-[10px] font-semibold text-neutral-800 leading-5">{settings.receiptFooter}</p>
+   607→              <p className="text-[8px] text-neutral-500 leading-4 flex items-center justify-center gap-1 flex-wrap">
+   608→                <Leaf className="size-2.5 inline" aria-hidden="true" />
+   609→                توسعه‌دهنده سامانه: {settings.developerCredit}
+   610→                <span className="mx-1">—</span>
+   611→                <span className="num">چاپ: {formatJalaliFull(new Date())}</span>
+   612→              </p>
+   613→            </div>
+   614→          </div>
+   615→          ) : (
+   616→            <ThermalReceipt detail={detail} settlement={settlement} words={words} settings={settings} paid={paid} />
+   617→          )}
+   618→        </div>
+   619→      </DialogContent>
+   620→    </Dialog>
+   621→  );
+   622→}
+   623→
+   624→/** دکمه شناور «چاپ رسید» برای استفاده در دیالوگ جزئیات — با وضعیت بارگذاری */
+   625→export function PrintReceiptButton({
+   626→  onClick,
+   627→  loading = false,
+   628→  className = "",
+   629→}: {
+   630→  onClick: () => void;
+   631→  loading?: boolean;
+   632→  className?: string;
+   633→}) {
+   634→  return (
+   635→    <Button variant="outline" size="sm" className={`gap-1.5 h-9 ${className}`} onClick={onClick} disabled={loading}>
+   636→      {loading ? <Loader2 className="size-4 animate-spin text-primary" /> : <FileDown className="size-4 text-primary" />}
+   637→      چاپ رسید
+   638→    </Button>
+   639→  );
+   640→}
+   641→

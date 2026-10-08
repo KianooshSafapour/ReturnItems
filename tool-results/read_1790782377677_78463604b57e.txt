@@ -1,0 +1,723 @@
+     1→"use client";
+     2→
+     3→// فهرست مرجوعی‌ها + پنجره جزئیات + فرم پرداخت مدیر
+     4→import { useCallback, useEffect, useState } from "react";
+     5→import { Button } from "@/components/ui/button";
+     6→import { Input } from "@/components/ui/input";
+     7→import { Badge } from "@/components/ui/badge";
+     8→import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+     9→import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+    10→import { Skeleton } from "@/components/ui/skeleton";
+    11→import { toast } from "sonner";
+    12→import { motion } from "framer-motion";
+    13→import {
+    14→  Search, FileText, ChevronLeft, ChevronRight, Loader2, Landmark,
+    15→  Wallet, CalendarClock, UserRound, Phone, CreditCard, Hash, Package,
+    16→  Hourglass, CheckCircle2, Download, ReceiptText,
+    17→} from "lucide-react";
+    18→import { MoneyDisplay } from "./money-input";
+    19→import { JalaliDateTimePicker } from "./jalali-datetime-picker";
+    20→import { IlluminatedDivider, PistachioMotif } from "./ornaments";
+    21→import { formatMoney, formatCardNumber, toFaDigits, toEnDigits, moneyWords } from "@/lib/money";
+    22→import { formatJalaliDateTime, formatJalaliFull } from "@/lib/jalali";
+    23→import { BANKS, digitsOnly } from "@/lib/validators";
+    24→import type { ReturnDetailDTO, ReturnListRow, SessionUser } from "./types";
+    25→
+    26→interface HistoryProps {
+    27→  user: SessionUser;
+    28→  statusFilter?: "pending" | "paid" | "all";
+    29→  onChanged?: () => void;
+    30→  compact?: boolean;
+    31→  title?: string;
+    32→}
+    33→
+    34→export function ReturnHistory({ user, statusFilter = "all", onChanged, compact, title }: HistoryProps) {
+    35→  const [status, setStatus] = useState<string>(statusFilter);
+    36→  const [q, setQ] = useState("");
+    37→  const [page, setPage] = useState(1);
+    38→  const [loading, setLoading] = useState(true);
+    39→  const [rows, setRows] = useState<ReturnListRow[]>([]);
+    40→  const [total, setTotal] = useState(0);
+    41→  const [detailId, setDetailId] = useState<string | null>(null);
+    42→  const pageSize = compact ? 8 : 20;
+    43→
+    44→  const load = useCallback(async () => {
+    45→    setLoading(true);
+    46→    try {
+    47→      const params = new URLSearchParams({
+    48→        status: status === "all" ? "all" : status,
+    49→        page: String(page),
+    50→        pageSize: String(pageSize),
+    51→      });
+    52→      if (q.trim()) params.set("q", q.trim());
+    53→      const res = await fetch(`/api/returns?${params}`);
+    54→      const data = await res.json();
+    55→      if (res.ok) {
+    56→        setRows(data.returns ?? []);
+    57→        setTotal(data.total ?? 0);
+    58→      }
+    59→    } catch {
+    60→      toast.error("خطا در دریافت فهرست مرجوعی‌ها");
+    61→    } finally {
+    62→      setLoading(false);
+    63→    }
+    64→  }, [status, q, page, pageSize]);
+    65→
+    66→  useEffect(() => {
+    67→    const t = setTimeout(load, 200);
+    68→    return () => clearTimeout(t);
+    69→  }, [load]);
+    70→
+    71→  const pages = Math.max(1, Math.ceil(total / pageSize));
+    72→
+    73→  return (
+    74→    <div className="space-y-4">
+    75→      {title && (
+    76→        <div className="flex items-center gap-2">
+    77→          <FileText className="size-5 text-primary" />
+    78→          <h2 className="font-extrabold text-lg">{title}</h2>
+    79→        </div>
+    80→      )}
+    81→
+    82→      {/* فیلترها */}
+    83→      <div className="flex flex-col sm:flex-row gap-3">
+    84→        <div className="relative flex-1">
+    85→          <Search className="absolute right-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+    86→          <Input
+    87→            placeholder="جستجو: شماره پیگیری، نام مشتری، موبایل یا نام کالا…"
+    88→            className="pr-10 h-11"
+    89→            value={q}
+    90→            onChange={(e) => {
+    91→              setQ(e.target.value);
+    92→              setPage(1);
+    93→            }}
+    94→          />
+    95→        </div>
+    96→        <Select
+    97→          value={status}
+    98→          onValueChange={(v) => {
+    99→            setStatus(v);
+   100→            setPage(1);
+   101→          }}
+   102→        >
+   103→          <SelectTrigger className="h-11 w-full sm:w-44">
+   104→            <SelectValue />
+   105→          </SelectTrigger>
+   106→          <SelectContent>
+   107→            <SelectItem value="all">همه وضعیت‌ها</SelectItem>
+   108→            <SelectItem value="pending">در انتظار پرداخت</SelectItem>
+   109→            <SelectItem value="paid">پرداخت شده</SelectItem>
+   110→          </SelectContent>
+   111→        </Select>
+   112→      </div>
+   113→
+   114→      {/* جدول */}
+   115→      <div className="rounded-2xl border bg-card overflow-hidden">
+   116→        <div className="overflow-x-auto">
+   117→          <div className="max-h-[70vh] overflow-y-auto">
+   118→            <table className="w-full text-sm min-w-[640px]">
+   119→              <thead className="sticky top-0 z-10 bg-muted/95 backdrop-blur border-b">
+   120→                <tr className="text-muted-foreground text-xs">
+   121→                  <th className="text-start font-semibold px-4 py-3">شماره پیگیری</th>
+   122→                  <th className="text-start font-semibold px-4 py-3">مشتری</th>
+   123→                  <th className="text-start font-semibold px-4 py-3">مبلغ کل</th>
+   124→                  <th className="text-start font-semibold px-4 py-3">اقلام</th>
+   125→                  {user.role === "owner" && (
+   126→                    <th className="text-start font-semibold px-4 py-3">صندوقدار</th>
+   127→                  )}
+   128→                  <th className="text-start font-semibold px-4 py-3">زمان ثبت</th>
+   129→                  <th className="text-start font-semibold px-4 py-3">وضعیت</th>
+   130→                  <th className="text-start font-semibold px-4 py-3">جزئیات</th>
+   131→                </tr>
+   132→              </thead>
+   133→              <tbody>
+   134→                {loading ? (
+   135→                  Array.from({ length: 5 }).map((_, i) => (
+   136→                    <tr key={i} className="border-b last:border-0">
+   137→                      <td colSpan={8} className="px-4 py-3">
+   138→                        <Skeleton className="h-6 w-full" />
+   139→                      </td>
+   140→                    </tr>
+   141→                  ))
+   142→                ) : rows.length === 0 ? (
+   143→                  <tr>
+   144→                    <td colSpan={8} className="py-12">
+   145→                      <div className="text-center text-muted-foreground">
+   146→                        <PistachioMotif size={52} className="mx-auto mb-3 opacity-60" />
+   147→                        <p className="text-sm">مرجوعی‌ای یافت نشد</p>
+   148→                      </div>
+   149→                    </td>
+   150→                  </tr>
+   151→                ) : (
+   152→                  rows.map((r, i) => (
+   153→                    <motion.tr
+   154→                      key={r.id}
+   155→                      initial={{ opacity: 0 }}
+   156→                      animate={{ opacity: 1 }}
+   157→                      transition={{ delay: i * 0.03 }}
+   158→                      className="border-b last:border-0 hover:bg-accent/40 transition-colors cursor-pointer"
+   159→                      onClick={() => setDetailId(r.id)}
+   160→                    >
+   161→                      <td className="px-4 py-3">
+   162→                        <span className="num font-bold text-primary" dir="ltr">
+   163→                          {r.code}
+   164→                        </span>
+   165→                      </td>
+   166→                      <td className="px-4 py-3">
+   167→                        <p className="font-semibold">{r.customerName}</p>
+   168→                        <p className="num text-xs text-muted-foreground" dir="ltr">
+   169→                          {toFaDigits(r.customerPhone)}
+   170→                        </p>
+   171→                      </td>
+   172→                      <td className="px-4 py-3">
+   173→                        <p className="num font-bold">{formatMoney(r.totalAmount)}</p>
+   174→                        <p className="num text-[10px] text-muted-foreground">
+   175→                          {formatMoney(Math.floor(r.totalAmount / 10))} تومان
+   176→                        </p>
+   177→                      </td>
+   178→                      <td className="px-4 py-3 num">{toFaDigits(r.itemCount)} قلم</td>
+   179→                      {user.role === "owner" && (
+   180→                        <td className="px-4 py-3 text-muted-foreground">{r.cashierName}</td>
+   181→                      )}
+   182→                      <td className="px-4 py-3 num text-xs text-muted-foreground whitespace-nowrap">
+   183→                        {formatJalaliDateTime(new Date(r.submittedAt))}
+   184→                      </td>
+   185→                      <td className="px-4 py-3">
+   186→                        {r.status === "pending" ? (
+   187→                          <Badge className="bg-chart-2/15 text-chart-2 border-chart-2/30 hover:bg-chart-2/20 gap-1">
+   188→                            <Hourglass className="size-3" />
+   189→                            در انتظار
+   190→                          </Badge>
+   191→                        ) : (
+   192→                          <Badge className="bg-primary/15 text-primary border-primary/30 hover:bg-primary/20 gap-1">
+   193→                            <CheckCircle2 className="size-3" />
+   194→                            پرداخت شد
+   195→                          </Badge>
+   196→                        )}
+   197→                      </td>
+   198→                      <td className="px-4 py-3">
+   199→                        <Button variant="ghost" size="sm" className="h-8">
+   200→                          <ReceiptText className="size-4 ml-1" />
+   201→                          مشاهده
+   202→                        </Button>
+   203→                      </td>
+   204→                    </motion.tr>
+   205→                  ))
+   206→                )}
+   207→              </tbody>
+   208→            </table>
+   209→          </div>
+   210→        </div>
+   211→
+   212→        {/* صفحه‌بندی */}
+   213→        {total > pageSize && (
+   214→          <div className="flex items-center justify-between px-4 py-3 border-t bg-muted/30">
+   215→            <p className="num text-xs text-muted-foreground">
+   216→              نمایش {toFaDigits((page - 1) * pageSize + 1)} تا{" "}
+   217→              {toFaDigits(Math.min(page * pageSize, total))} از {toFaDigits(total)} مورد
+   218→            </p>
+   219→            <div className="flex items-center gap-1.5">
+   220→              <Button
+   221→                variant="outline"
+   222→                size="icon"
+   223→                className="size-8"
+   224→                disabled={page <= 1}
+   225→                onClick={() => setPage((p) => p - 1)}
+   226→                aria-label="صفحه قبل"
+   227→              >
+   228→                <ChevronRight className="size-4" />
+   229→              </Button>
+   230→              <span className="num text-sm font-bold px-2">
+   231→                {toFaDigits(page)} / {toFaDigits(pages)}
+   232→              </span>
+   233→              <Button
+   234→                variant="outline"
+   235→                size="icon"
+   236→                className="size-8"
+   237→                disabled={page >= pages}
+   238→                onClick={() => setPage((p) => p + 1)}
+   239→                aria-label="صفحه بعد"
+   240→              >
+   241→                <ChevronLeft className="size-4" />
+   242→              </Button>
+   243→            </div>
+   244→          </div>
+   245→        )}
+   246→      </div>
+   247→
+   248→      {/* پنجره جزئیات */}
+   249→      <ReturnDetailDialog
+   250→        id={detailId}
+   251→        onClose={() => setDetailId(null)}
+   252→        user={user}
+   253→        onPaid={() => {
+   254→          load();
+   255→          onChanged?.();
+   256→        }}
+   257→      />
+   258→    </div>
+   259→  );
+   260→}
+   261→
+   262→// ---------- پنجره جزئیات مرجوعی ----------
+   263→export function ReturnDetailDialog({
+   264→  id,
+   265→  onClose,
+   266→  user,
+   267→  onPaid,
+   268→}: {
+   269→  id: string | null;
+   270→  onClose: () => void;
+   271→  user: SessionUser;
+   272→  onPaid?: () => void;
+   273→}) {
+   274→  // الگوی استخراج حالت: بارگذاری از مقایسهٔ شناسهٔ درخواستی با دادهٔ واکشی‌شده به‌دست می‌آید
+   275→  const [fetched, setFetched] = useState<{ id: string; data: ReturnDetailDTO | null } | null>(null);
+   276→  const current = fetched && fetched.id === id ? fetched : null;
+   277→  const loading = !!id && !current;
+   278→  const detail = current?.data ?? null;
+   279→
+   280→  useEffect(() => {
+   281→    if (!id) return;
+   282→    let cancelled = false;
+   283→    fetch(`/api/returns/${id}`)
+   284→      .then((r) => r.json())
+   285→      .then((d) => {
+   286→        if (cancelled) return;
+   287→        if (d.id) setFetched({ id, data: d });
+   288→        else {
+   289→          setFetched({ id, data: null });
+   290→          toast.error(d.error || "خطا در دریافت جزئیات");
+   291→        }
+   292→      })
+   293→      .catch(() => {
+   294→        if (!cancelled) {
+   295→          setFetched({ id, data: null });
+   296→          toast.error("خطا در دریافت جزئیات");
+   297→        }
+   298→      });
+   299→    return () => {
+   300→      cancelled = true;
+   301→    };
+   302→  }, [id]);
+   303→
+   304→  // پاک‌سازی جزئیات هنگام بستن پنجره (در رویداد، نه افکت)
+   305→  function handleClose() {
+   306→    setFetched(null);
+   307→    onClose();
+   308→  }
+   309→
+   310→  return (
+   311→    <Dialog open={!!id} onOpenChange={(o) => !o && handleClose()}>
+   312→      <DialogContent className="max-w-3xl max-h-[92vh] overflow-y-auto p-0" dir="rtl">
+   313→        {loading || !detail ? (
+   314→          <div className="p-10 flex flex-col items-center gap-4">
+   315→            <DialogHeader className="sr-only">
+   316→              <DialogTitle>جزئیات مرجوعی</DialogTitle>
+   317→              <DialogDescription>در حال دریافت جزئیات از سرور</DialogDescription>
+   318→            </DialogHeader>
+   319→            <Loader2 className="size-8 animate-spin text-primary" />
+   320→            <p className="text-sm text-muted-foreground">در حال دریافت جزئیات…</p>
+   321→          </div>
+   322→        ) : (
+   323→          <div>
+   324→            <DialogHeader className="px-6 pt-6 pb-0">
+   325→              <DialogTitle className="flex items-center gap-2 flex-wrap">
+   326→                <span className="num text-primary" dir="ltr">
+   327→                  {detail.code}
+   328→                </span>
+   329→                {detail.status === "pending" ? (
+   330→                  <Badge className="bg-chart-2/15 text-chart-2 border-chart-2/30 gap-1">
+   331→                    <Hourglass className="size-3" /> در انتظار پرداخت
+   332→                  </Badge>
+   333→                ) : (
+   334→                  <Badge className="bg-primary/15 text-primary border-primary/30 gap-1">
+   335→                    <CheckCircle2 className="size-3" /> پرداخت و بایگانی شد
+   336→                  </Badge>
+   337→                )}
+   338→              </DialogTitle>
+   339→              <DialogDescription className="sr-only">
+   340→                جزئیات کامل مرجوعی، اقلام و اطلاعات پرداخت
+   341→              </DialogDescription>
+   342→            </DialogHeader>
+   343→
+   344→            <div className="p-6 space-y-6">
+   345→              {/* اطلاعات مشتری */}
+   346→              <section className="grid sm:grid-cols-2 gap-3 text-sm">
+   347→                <InfoRow icon={<UserRound className="size-4" />} label="مشتری" value={detail.customerName} />
+   348→                <InfoRow
+   349→                  icon={<Phone className="size-4" />}
+   350→                  label="موبایل"
+   351→                  value={toFaDigits(detail.customerPhone)}
+   352→                  ltr
+   353→                />
+   354→                <InfoRow
+   355→                  icon={<CreditCard className="size-4" />}
+   356→                  label="کارت بانکی مشتری"
+   357→                  value={formatCardNumber(detail.customerCardNumber)}
+   358→                  ltr
+   359→                />
+   360→                <InfoRow
+   361→                  icon={<CalendarClock className="size-4" />}
+   362→                  label="زمان خرید"
+   363→                  value={formatJalaliFull(new Date(detail.purchaseAt))}
+   364→                />
+   365→                <InfoRow icon={<UserRound className="size-4" />} label="صندوقدار" value={detail.cashier.fullName} />
+   366→                <InfoRow
+   367→                  icon={<CalendarClock className="size-4" />}
+   368→                  label="زمان ثبت"
+   369→                  value={formatJalaliFull(new Date(detail.submittedAt))}
+   370→                />
+   371→              </section>
+   372→
+   373→              {/* دلیل */}
+   374→              <section className="rounded-xl bg-muted/50 border p-4">
+   375→                <p className="text-xs text-muted-foreground mb-1.5">دلیل مرجوعی</p>
+   376→                <p className="font-semibold leading-7">{detail.reason}</p>
+   377→                {detail.note && (
+   378→                  <p className="text-sm text-muted-foreground leading-7 mt-2 border-t pt-2">
+   379→                    توضیحات: {detail.note}
+   380→                  </p>
+   381→                )}
+   382→              </section>
+   383→
+   384→              {/* اقلام */}
+   385→              <section>
+   386→                <div className="flex items-center gap-2 mb-3">
+   387→                  <Package className="size-4 text-primary" />
+   388→                  <h4 className="font-bold text-sm">اقلام مرجوعی</h4>
+   389→                  <Badge variant="outline" className="num">
+   390→                    {toFaDigits(detail.items.length)} قلم
+   391→                  </Badge>
+   392→                </div>
+   393→                <div className="rounded-xl border overflow-hidden">
+   394→                  <div className="overflow-x-auto">
+   395→                    <table className="w-full text-sm min-w-[520px]">
+   396→                      <thead className="bg-muted/70 border-b text-xs text-muted-foreground">
+   397→                        <tr>
+   398→                          <th className="text-start px-3 py-2.5 font-semibold">نام کالا</th>
+   399→                          <th className="text-start px-3 py-2.5 font-semibold">بارکد</th>
+   400→                          <th className="text-start px-3 py-2.5 font-semibold">تعداد</th>
+   401→                          <th className="text-start px-3 py-2.5 font-semibold">قیمت واحد</th>
+   402→                          <th className="text-start px-3 py-2.5 font-semibold">مبلغ کل</th>
+   403→                        </tr>
+   404→                      </thead>
+   405→                      <tbody>
+   406→                        {detail.items.map((it) => (
+   407→                          <tr key={it.id} className="border-b last:border-0">
+   408→                            <td className="px-3 py-2.5 font-semibold">
+   409→                              {it.name}
+   410→                              {it.code && (
+   411→                                <span className="block num text-[10px] text-muted-foreground">
+   412→                                  کد هلو: {toFaDigits(it.code)}
+   413→                                </span>
+   414→                              )}
+   415→                            </td>
+   416→                            <td className="px-3 py-2.5 num text-xs text-muted-foreground" dir="ltr">
+   417→                              {it.barcode ? toFaDigits(it.barcode) : "—"}
+   418→                            </td>
+   419→                            <td className="px-3 py-2.5 num">{toFaDigits(it.quantity)}</td>
+   420→                            <td className="px-3 py-2.5 num">{formatMoney(it.unitPrice)}</td>
+   421→                            <td className="px-3 py-2.5 num font-bold text-primary">
+   422→                              {formatMoney(it.lineTotal)}
+   423→                            </td>
+   424→                          </tr>
+   425→                        ))}
+   426→                      </tbody>
+   427→                      <tfoot className="bg-primary/5 border-t">
+   428→                        <tr>
+   429→                          <td colSpan={4} className="px-3 py-3 font-bold">
+   430→                            جمع کل:
+   431→                          </td>
+   432→                          <td className="px-3 py-3">
+   433→                            <MoneyDisplay amount={detail.totalAmount} size="sm" showWords={false} />
+   434→                          </td>
+   435→                        </tr>
+   436→                      </tfoot>
+   437→                    </table>
+   438→                  </div>
+   439→                </div>
+   440→                <div className="mt-2 rounded-lg border border-dashed border-primary/25 bg-primary/5 px-4 py-2.5 space-y-1">
+   441→                  <p className="num text-[11px] text-muted-foreground">{moneyWordsRial(detail.totalAmount)}</p>
+   442→                  <p className="num text-[11px] text-muted-foreground">{moneyWordsToman(detail.totalAmount)}</p>
+   443→                </div>
+   444→              </section>
+   445→
+   446→              {/* پرداخت */}
+   447→              {detail.status === "paid" && detail.payment ? (
+   448→                <section className="rounded-xl border border-primary/30 bg-primary/5 p-4">
+   449→                  <div className="flex items-center gap-2 mb-3">
+   450→                    <Wallet className="size-4 text-primary" />
+   451→                    <h4 className="font-bold text-sm">اطلاعات بازگشت وجه</h4>
+   452→                  </div>
+   453→                  <div className="grid sm:grid-cols-2 gap-3 text-sm">
+   454→                    <InfoRow icon={<Landmark className="size-4" />} label="بانک مبدأ" value={detail.payment.bankName} />
+   455→                    <InfoRow
+   456→                      icon={<CalendarClock className="size-4" />}
+   457→                      label="زمان انتقال"
+   458→                      value={formatJalaliFull(new Date(detail.payment.transferredAt))}
+   459→                    />
+   460→                    {detail.payment.accountNumber && (
+   461→                      <InfoRow
+   462→                        icon={<Hash className="size-4" />}
+   463→                        label="شماره حساب مبدأ"
+   464→                        value={toFaDigits(detail.payment.accountNumber)}
+   465→                        ltr
+   466→                      />
+   467→                    )}
+   468→                    {detail.payment.cardNumber && (
+   469→                      <InfoRow
+   470→                        icon={<CreditCard className="size-4" />}
+   471→                        label="کارت مبدأ"
+   472→                        value={formatCardNumber(detail.payment.cardNumber)}
+   473→                        ltr
+   474→                      />
+   475→                    )}
+   476→                    {detail.payment.referenceNumber && (
+   477→                      <InfoRow
+   478→                        icon={<Hash className="size-4" />}
+   479→                        label="شماره پیگیری"
+   480→                        value={toFaDigits(detail.payment.referenceNumber)}
+   481→                        ltr
+   482→                      />
+   483→                    )}
+   484→                    <InfoRow
+   485→                      icon={<UserRound className="size-4" />}
+   486→                      label="ثبت‌کننده پرداخت"
+   487→                      value={detail.payment.recordedBy.fullName}
+   488→                    />
+   489→                  </div>
+   490→                </section>
+   491→              ) : user.role === "owner" ? (
+   492→                <PaymentForm
+   493→                  detail={detail}
+   494→                  onPaid={(code) => {
+   495→                    toast.success(`پرداخت مرجوعی ${code} ثبت و بایگانی شد ✅`);
+   496→                    onClose();
+   497→                    onPaid?.();
+   498→                  }}
+   499→                />
+   500→              ) : (
+   501→                <div className="rounded-xl border border-dashed border-chart-2/40 bg-chart-2/5 p-4 text-sm text-muted-foreground flex items-center gap-3">
+   502→                  <Hourglass className="size-5 text-chart-2 shrink-0" />
+   503→                  در انتظار بررسی و پرداخت توسط مدیریت (آقای نوروزی)
+   504→                </div>
+   505→              )}
+   506→            </div>
+   507→          </div>
+   508→        )}
+   509→      </DialogContent>
+   510→    </Dialog>
+   511→  );
+   512→}
+   513→
+   514→function InfoRow({
+   515→  icon,
+   516→  label,
+   517→  value,
+   518→  ltr,
+   519→}: {
+   520→  icon: React.ReactNode;
+   521→  label: string;
+   522→  value: string;
+   523→  ltr?: boolean;
+   524→}) {
+   525→  return (
+   526→    <div className="flex items-center gap-3 rounded-lg bg-muted/40 px-3 py-2.5 min-w-0">
+   527→      <span className="text-primary shrink-0">{icon}</span>
+   528→      <div className="min-w-0">
+   529→        <p className="text-[11px] text-muted-foreground">{label}</p>
+   530→        <p className={`font-bold truncate ${ltr ? "num" : ""}`} dir={ltr ? "ltr" : undefined}>
+   531→          {value}
+   532→        </p>
+   533→      </div>
+   534→    </div>
+   535→  );
+   536→}
+   537→
+   538→// ---------- فرم پرداخت مدیر ----------
+   539→function moneyWordsRial(n: number) {
+   540→  return moneyWords(n).rial;
+   541→}
+   542→function moneyWordsToman(n: number) {
+   543→  return moneyWords(n).toman;
+   544→}
+   545→export function PaymentForm({
+   546→  detail,
+   547→  onPaid,
+   548→}: {
+   549→  detail: ReturnDetailDTO;
+   550→  onPaid: (code: string) => void;
+   551→}) {
+   552→  const [bankName, setBankName] = useState("");
+   553→  const [accountNumber, setAccountNumber] = useState("");
+   554→  const [cardNumber, setCardNumber] = useState("");
+   555→  const [referenceNumber, setReferenceNumber] = useState("");
+   556→  const [transferredAt, setTransferredAt] = useState<Date | null>(null);
+   557→  const [submitting, setSubmitting] = useState(false);
+   558→
+   559→  async function submit() {
+   560→    if (submitting) return;
+   561→    if (!bankName) {
+   562→      toast.error("بانک مبدأ را انتخاب کنید");
+   563→      return;
+   564→    }
+   565→    if (!accountNumber && !digitsOnly(cardNumber) && !referenceNumber) {
+   566→      toast.error("حداقل شماره حساب، کارت یا شماره پیگیری را وارد کنید");
+   567→      return;
+   568→    }
+   569→    if (cardNumber && !/^\d{16}$/.test(digitsOnly(cardNumber))) {
+   570→      toast.error("شماره کارت مبدأ باید ۱۶ رقم باشد");
+   571→      return;
+   572→    }
+   573→    if (!transferredAt) {
+   574→      toast.error("زمان انتقال وجه را انتخاب کنید");
+   575→      return;
+   576→    }
+   577→    setSubmitting(true);
+   578→    try {
+   579→      const res = await fetch(`/api/returns/${detail.id}/payment`, {
+   580→        method: "POST",
+   581→        headers: { "Content-Type": "application/json" },
+   582→        body: JSON.stringify({
+   583→          bankName,
+   584→          accountNumber: accountNumber.trim() || null,
+   585→          cardNumber: digitsOnly(cardNumber) || null,
+   586→          referenceNumber: referenceNumber.trim() || null,
+   587→          transferredAt: transferredAt.toISOString(),
+   588→        }),
+   589→      });
+   590→      const data = await res.json();
+   591→      if (!res.ok) {
+   592→        toast.error(data.error || "ثبت پرداخت ناموفق بود");
+   593→        return;
+   594→      }
+   595→      onPaid(data.code);
+   596→    } catch {
+   597→      toast.error("ارتباط با سرور برقرار نشد");
+   598→    } finally {
+   599→      setSubmitting(false);
+   600→    }
+   601→  }
+   602→
+   603→  return (
+   604→    <section className="rounded-xl border-2 border-primary/30 bg-card p-4 space-y-4">
+   605→      <div className="flex items-center gap-2">
+   606→        <Wallet className="size-4 text-primary" />
+   607→        <h4 className="font-bold text-sm">ثبت بازگشت وجه (ویژه مدیر)</h4>
+   608→      </div>
+   609→      <IlluminatedDivider />
+   610→      <div className="rounded-lg bg-primary/5 border border-primary/20 p-3">
+   611→        <MoneyDisplay amount={detail.totalAmount} size="md" />
+   612→      </div>
+   613→      <div className="grid sm:grid-cols-2 gap-3">
+   614→        <div className="space-y-1.5">
+   615→          <label className="text-xs font-semibold flex items-center gap-1">
+   616→            <Landmark className="size-3.5 text-primary" />
+   617→            بانک مبدأ (انتقال وجه)
+   618→          </label>
+   619→          <Select value={bankName} onValueChange={setBankName}>
+   620→            <SelectTrigger className="h-10">
+   621→              <SelectValue placeholder="انتخاب بانک…" />
+   622→            </SelectTrigger>
+   623→            <SelectContent className="max-h-72">
+   624→              {BANKS.map((b) => (
+   625→                <SelectItem key={b} value={b}>
+   626→                  {b}
+   627→                </SelectItem>
+   628→              ))}
+   629→            </SelectContent>
+   630→          </Select>
+   631→        </div>
+   632→        <div className="space-y-1.5">
+   633→          <label className="text-xs font-semibold">زمان انتقال وجه</label>
+   634→          <JalaliDateTimePicker value={transferredAt} onChange={setTransferredAt} placeholder="انتخاب زمان انتقال" />
+   635→        </div>
+   636→        <div className="space-y-1.5">
+   637→          <label className="text-xs font-semibold">شماره حساب مبدأ</label>
+   638→          <Input
+   639→            dir="ltr"
+   640→            className="num text-left h-10"
+   641→            placeholder="اختیاری — مثال: 0101234567890"
+   642→            value={accountNumber ? toFaDigits(accountNumber) : ""}
+   643→            onChange={(e) => setAccountNumber(toEnDigits(e.target.value).replace(/[^\d]/g, "").slice(0, 26))}
+   644→          />
+   645→        </div>
+   646→        <div className="space-y-1.5">
+   647→          <label className="text-xs font-semibold">شماره کارت مبدأ</label>
+   648→          <Input
+   649→            dir="ltr"
+   650→            inputMode="numeric"
+   651→            className="num text-left h-10"
+   652→            placeholder="اختیاری — ۱۶ رقم"
+   653→            value={cardNumber ? formatCardNumber(cardNumber) : ""}
+   654→            onChange={(e) => setCardNumber(digitsOnly(e.target.value).slice(0, 16))}
+   655→          />
+   656→        </div>
+   657→        <div className="space-y-1.5 sm:col-span-2">
+   658→          <label className="text-xs font-semibold flex items-center gap-1">
+   659→            <Hash className="size-3.5 text-primary" />
+   660→            شماره پیگیری/ارجاع انتقال
+   661→          </label>
+   662→          <Input
+   663→            dir="ltr"
+   664→            className="text-left h-10"
+   665→            placeholder="اختیاری — شماره ارجاع بانک"
+   666→            value={referenceNumber}
+   667→            onChange={(e) => setReferenceNumber(e.target.value.slice(0, 40))}
+   668→          />
+   669→        </div>
+   670→      </div>
+   671→      <Button className="w-full h-12 font-bold" onClick={submit} disabled={submitting}>
+   672→        {submitting ? (
+   673→          <>
+   674→            <Loader2 className="size-4 animate-spin" /> در حال ثبت…
+   675→          </>
+   676→        ) : (
+   677→          <>
+   678→            <CheckCircle2 className="size-4" /> ثبت پرداخت و بایگانی مرجوعی
+   679→          </>
+   680→        )}
+   681→      </Button>
+   682→    </section>
+   683→  );
+   684→}
+   685→
+   686→/** دکمه خروجی اکسل آرشیو (مدیر) */
+   687→export function ExportReturnsButton() {
+   688→  const [loading, setLoading] = useState(false);
+   689→  return (
+   690→    <Button
+   691→      variant="outline"
+   692→      className="h-11 font-semibold"
+   693→      disabled={loading}
+   694→      onClick={async () => {
+   695→        setLoading(true);
+   696→        try {
+   697→          const res = await fetch("/api/returns/export");
+   698→          if (!res.ok) {
+   699→            const d = await res.json().catch(() => ({}));
+   700→            toast.error(d.error || "خروجی اکسل در دسترس نیست");
+   701→            return;
+   702→          }
+   703→          const blob = await res.blob();
+   704→          const url = URL.createObjectURL(blob);
+   705→          const a = document.createElement("a");
+   706→          a.href = url;
+   707→          a.download = "hyper-zeytoon-returns.xlsx";
+   708→          a.click();
+   709→          URL.revokeObjectURL(url);
+   710→          toast.success("فایل اکسل آرشیو مرجوعی‌ها دانلود شد");
+   711→        } catch {
+   712→          toast.error("دانلود خروجی ناموفق بود");
+   713→        } finally {
+   714→          setLoading(false);
+   715→        }
+   716→      }}
+   717→    >
+   718→      {loading ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
+   719→      خروجی اکسل (هلو)
+   720→    </Button>
+   721→  );
+   722→}
+   723→

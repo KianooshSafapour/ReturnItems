@@ -1,0 +1,1269 @@
+     1→"use client";
+     2→
+     3→// فرم ثبت مرجوعی — قلب سامانه: اسکن بارکد، جستجوی کالا، اقلام، مبالغ با حروف‌خوانی
+     4→import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+     5→import { Button } from "@/components/ui/button";
+     6→import { Input } from "@/components/ui/input";
+     7→import { Label } from "@/components/ui/label";
+     8→import { Textarea } from "@/components/ui/textarea";
+     9→import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+    10→import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+    11→import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
+    12→import { Badge } from "@/components/ui/badge";
+    13→import { toast } from "sonner";
+    14→import { AnimatePresence, motion } from "framer-motion";
+    15→import {
+    16→  ScanLine, Search, Plus, Minus, Trash2, UserRound, UserRoundSearch, Phone, CreditCard,
+    17→  ClipboardList, Loader2, Send, CheckCircle2, PackageSearch, Sparkles,
+    18→  MessageSquareText, History, RotateCcw, Landmark, Barcode, Wand2,
+    19→  ArrowLeftRight, Wallet, TriangleAlert, RefreshCw, Info, Repeat2, Printer, Camera,
+    20→} from "lucide-react";
+    21→import { MoneyInput, MoneyDisplay } from "./money-input";
+    22→import { JalaliDateTimePicker } from "./jalali-datetime-picker";
+    23→import { IlluminatedDivider, PistachioMotif } from "./ornaments";
+    24→import { formatMoney, formatCardNumber, toEnDigits, toFaDigits } from "@/lib/money";
+    25→import { RETURN_REASONS, detectBankName, digitsOnly, isValidCardNumber, isValidIranMobile } from "@/lib/validators";
+    26→import { generateInternalBarcode } from "@/lib/barcode";
+    27→import { formatJalaliFull, formatJalaliDateTime } from "@/lib/jalali";
+    28→import { SETTLEMENT_META, deriveSettlementType } from "./types";
+    29→import { ReceiptDialog } from "./receipt-dialog";
+    30→import { CameraScannerDialog } from "./camera-scanner-dialog";
+    31→import type { ProductDTO, ReturnItemDraft, SessionUser, SettlementType, ReturnDetailDTO, CustomerDetailDTO } from "./types";
+    32→import { CustomerHistoryDialog } from "./customer-history-dialog";
+    33→
+    34→interface ReturnFormProps {
+    35→  user: SessionUser;
+    36→}
+    37→
+    38→let keySeq = 1;
+    39→
+    40→export function ReturnForm({ user }: ReturnFormProps) {
+    41→  // اطلاعات مشتری
+    42→  const [customerName, setCustomerName] = useState("");
+    43→  const [customerPhone, setCustomerPhone] = useState("");
+    44→  const [customerCard, setCustomerCard] = useState("");
+    45→  const [purchaseAt, setPurchaseAt] = useState<Date | null>(null);
+    46→  const [reason, setReason] = useState<string>("");
+    47→  const [note, setNote] = useState("");
+    48→
+    49→  // اقلام
+    50→  const [items, setItems] = useState<ReturnItemDraft[]>([]);
+    51→  const [barcodeInput, setBarcodeInput] = useState("");
+    52→  const [cameraOpen, setCameraOpen] = useState(false);
+    53→  const [searchOpen, setSearchOpen] = useState(false);
+    54→  const [searchQuery, setSearchQuery] = useState("");
+    55→  const [searchResults, setSearchResults] = useState<ProductDTO[]>([]);
+    56→  const [searchLoading, setSearchLoading] = useState(false);
+    57→  const [scanning, setScanning] = useState(false);
+    58→
+    59→  // تسویه با مشتری: کالای جایگزین + مبلغ قابل انتقال + دلیل اختلاف
+    60→  const [exchangeValue, setExchangeValue] = useState(0);
+    61→  const [transferAmount, setTransferAmount] = useState(0);
+    62→  const [transferNote, setTransferNote] = useState("");
+    63→
+    64→  const [submitting, setSubmitting] = useState(false);
+    65→  const [success, setSuccess] = useState<{
+    66→    id: string;
+    67→    code: string;
+    68→    total: number;
+    69→    transfer: number;
+    70→    exchange: number;
+    71→    settlementType: SettlementType;
+    72→    count: number;
+    73→    at: Date;
+    74→  } | null>(null);
+    75→  const [todayCount, setTodayCount] = useState(0);
+    76→
+    77→  // رسید چاپی بلافاصله پس از ثبت
+    78→  const [receiptDetail, setReceiptDetail] = useState<ReturnDetailDTO | null>(null);
+    79→  const [receiptOpen, setReceiptOpen] = useState(false);
+    80→  const [receiptLoading, setReceiptLoading] = useState(false);
+    81→
+    82→  // شناسایی مشتری بر اساس موبایل (سابقه مرجوعی‌ها سر میز)
+    83→  const [customerLookup, setCustomerLookup] = useState<CustomerDetailDTO | null>(null);
+    84→  const [customerHistoryOpen, setCustomerHistoryOpen] = useState(false);
+    85→
+    86→  async function printReceiptNow() {
+    87→    if (!success?.id || receiptLoading) return;
+    88→    setReceiptLoading(true);
+    89→    try {
+    90→      const res = await fetch(`/api/returns/${success.id}`);
+    91→      const data = await res.json();
+    92→      if (!res.ok || !data?.id) {
+    93→        toast.error(data?.error || "دریافت اطلاعات رسید ناموفق بود");
+    94→        return;
+    95→      }
+    96→      setReceiptDetail(data as ReturnDetailDTO);
+    97→      setReceiptOpen(true);
+    98→    } catch {
+    99→      toast.error("ارتباط با سرور برقرار نشد");
+   100→    } finally {
+   101→      setReceiptLoading(false);
+   102→    }
+   103→  }
+   104→
+   105→  const barcodeRef = useRef<HTMLInputElement>(null);
+   106→
+   107→  const total = useMemo(() => items.reduce((s, i) => s + i.quantity * i.unitPrice, 0), [items]);
+   108→  const totalCount = useMemo(() => items.reduce((s, i) => s + i.quantity, 0), [items]);
+   109→
+   110→  // مشتقات تسویه
+   111→  const settlementType = deriveSettlementType(total, exchangeValue, transferAmount);
+   112→  const netAmount = total - exchangeValue; // مانده خالص حق مشتری پس از کسر جایگزین
+   113→  const customerDebt = exchangeValue > total ? exchangeValue - total : 0;
+   114→  const customerCredit =
+   115→    transferAmount + exchangeValue < total ? total - exchangeValue - transferAmount : 0;
+   116→  const noteRequired = settlementType === "partial" || settlementType === "debt";
+   117→
+   118→  // همگام‌سازی مبلغ قابل انتقال با جمع اقلام/جایگزین (بازمحاسبه خودکار)
+   119→  useEffect(() => {
+   120→    setTransferAmount(Math.max(0, total - exchangeValue));
+   121→  }, [total, exchangeValue]);
+   122→
+   123→  const phoneOk = isValidIranMobile(customerPhone);
+   124→  const cardOk = isValidCardNumber(customerCard);
+   125→  const bankName = detectBankName(customerCard);
+   126→
+   127→  // استعلام خودکار سابقه مشتری پس از معتبر شدن شماره موبایل (با تأخیر)
+   128→  useEffect(() => {
+   129→    if (!phoneOk) {
+   130→      setCustomerLookup(null);
+   131→      return;
+   132→    }
+   133→    const t = setTimeout(async () => {
+   134→      try {
+   135→        const res = await fetch(`/api/customers/${encodeURIComponent(customerPhone)}`);
+   136→        const data: CustomerDetailDTO = await res.json();
+   137→        setCustomerLookup(data?.found ? data : null);
+   138→      } catch {
+   139→        setCustomerLookup(null);
+   140→      }
+   141→    }, 400);
+   142→    return () => clearTimeout(t);
+   143→  }, [customerPhone, phoneOk]);
+   144→
+   145→  // جستجوی زنده کالا (با تأخیر)
+   146→  useEffect(() => {
+   147→    if (!searchOpen) return;
+   148→    const q = searchQuery.trim();
+   149→    if (q.length < 2) {
+   150→      setSearchResults([]);
+   151→      return;
+   152→    }
+   153→    const t = setTimeout(async () => {
+   154→      setSearchLoading(true);
+   155→      try {
+   156→        const res = await fetch(`/api/products?q=${encodeURIComponent(q)}`);
+   157→        const data = await res.json();
+   158→        setSearchResults(data.products ?? []);
+   159→      } catch {
+   160→        setSearchResults([]);
+   161→      } finally {
+   162→        setSearchLoading(false);
+   163→      }
+   164→    }, 250);
+   165→    return () => clearTimeout(t);
+   166→  }, [searchQuery, searchOpen]);
+   167→
+   168→  function addItem(p: ProductDTO | null, manual = false): boolean {
+   169→    let existing: ReturnItemDraft | undefined;
+   170→    if (p) {
+   171→      existing = items.find(
+   172→        (i) => (p.barcode && i.barcode === p.barcode) || (p.id && i.productId === p.id)
+   173→      );
+   174→      if (existing) {
+   175→        setItems((prev) =>
+   176→          prev.map((i) => (i.key === existing!.key ? { ...i, quantity: Math.min(999, i.quantity + 1) } : i))
+   177→        );
+   178→        toast.info(`«${p.name}» از قبل در فهرست است — تعداد افزایش یافت`, {
+   179→          description: "تعداد فعلی: " + toFaDigits((existing.quantity || 0) + 1),
+   180→        });
+   181→        return true;
+   182→      }
+   183→      setItems((prev) => [
+   184→        {
+   185→          key: `k${keySeq++}`,
+   186→          productId: p.id,
+   187→          name: p.name,
+   188→          barcode: p.barcode,
+   189→          code: p.code,
+   190→          quantity: 1,
+   191→          unitPrice: p.price,
+   192→          fromDb: true,
+   193→          barcodeLocked: !!p.barcode,
+   194→        },
+   195→        ...prev,
+   196→      ]);
+   197→      return true;
+   198→    }
+   199→    if (manual) {
+   200→      setItems((prev) => [
+   201→        {
+   202→          key: `k${keySeq++}`,
+   203→          productId: null,
+   204→          name: "",
+   205→          // هر قلم دستی هم بارکد دارد — بارکد داخلی EAN-13 تولید می‌شود
+   206→          barcode: generateInternalBarcode(),
+   207→          code: null,
+   208→          quantity: 1,
+   209→          unitPrice: 0,
+   210→          fromDb: false,
+   211→          barcodeLocked: false,
+   212→        },
+   213→        ...prev,
+   214→      ]);
+   215→      return true;
+   216→    }
+   217→    return false;
+   218→  }
+   219→
+   220→  async function handleBarcode(e: React.KeyboardEvent<HTMLInputElement>) {
+   221→    if (e.key !== "Enter") return;
+   222→    e.preventDefault();
+   223→    const code = digitsOnly(barcodeInput);
+   224→    if (code.length < 4) {
+   225→      if (code.length > 0) toast.error("بارکد خیلی کوتاه است");
+   226→      return;
+   227→    }
+   228→    await lookupBarcode(code, true);
+   229→  }
+   230→
+   231→  /** جستجوی بارکد در بانک کالا — مشترک بین اسکنر سیمی، ورود دستی و دوربین */
+   232→  async function lookupBarcode(code: string, focusAfter: boolean) {
+   233→    setScanning(true);
+   234→    try {
+   235→      const res = await fetch(`/api/products?barcode=${encodeURIComponent(code)}`);
+   236→      const data = await res.json();
+   237→      const p: ProductDTO | undefined = data.products?.[0];
+   238→      if (p) {
+   239→        addItem(p);
+   240→        toast.success(`افزوده شد: ${p.name}`, {
+   241→          description: `قیمت: ${formatMoney(p.price)} ریال`,
+   242→        });
+   243→        setBarcodeInput("");
+   244→      } else {
+   245→        toast.error(`کالایی با بارکد ${toFaDigits(code)} در بانک کالا یافت نشد`, {
+   246→          description: "می‌توانید آن را به‌صورت دستی به فهرست اضافه کنید",
+   247→          duration: 5000,
+   248→        });
+   249→      }
+   250→    } catch {
+   251→      toast.error("خطا در جستجوی بارکد");
+   252→    } finally {
+   253→      setScanning(false);
+   254→      if (focusAfter) barcodeRef.current?.focus();
+   255→    }
+   256→  }
+   257→
+   258→  /** خوانده‌شدن بارکد از دوربین — فرم باز می‌ماند تا چند قلم پشت‌سرهم اسکن شود */
+   259→  function handleCameraDetect(code: string) {
+   260→    const clean = digitsOnly(code);
+   261→    if (clean.length < 4) {
+   262→      toast.error("بارکد خوانده‌شده از دوربین معتبر نیست");
+   263→      return;
+   264→    }
+   265→    void lookupBarcode(clean, false);
+   266→  }
+   267→
+   268→  function updateItem(key: string, patch: Partial<ReturnItemDraft>) {
+   269→    setItems((prev) => prev.map((i) => (i.key === key ? { ...i, ...patch } : i)));
+   270→  }
+   271→  function removeItem(key: string) {
+   272→    setItems((prev) => prev.filter((i) => i.key !== key));
+   273→  }
+   274→
+   275→  function validate(): string | null {
+   276→    if (customerName.trim().length < 2) return "نام مشتری را کامل وارد کنید";
+   277→    if (!phoneOk) return "شماره موبایل مشتری معتبر نیست (۰۹xxxxxxxxx)";
+   278→    if (!cardOk) return "شماره کارت بانکی مشتری معتبر نیست";
+   279→    if (!purchaseAt) return "زمان خرید مشتری را انتخاب کنید";
+   280→    if (!reason) return "دلیل مرجوعی را انتخاب کنید";
+   281→    if (items.length === 0) return "حداقل یک کالا به فهرست اضافه کنید";
+   282→    for (const i of items) {
+   283→      if (!i.name.trim()) return "نام یکی از اقلام خالی است";
+   284→      if (i.quantity < 1) return `تعداد «${i.name}» باید حداقل ۱ باشد`;
+   285→      if (i.unitPrice <= 0) return `قیمت «${i.name}» را وارد کنید`;
+   286→      if (!i.barcode || digitsOnly(i.barcode).length < 4)
+   287→        return `بارکد «${i.name}» خالی است — بارکد را وارد کنید یا دکمه تولید بارکد داخلی را بزنید`;
+   288→    }
+   289→    // منطق تسویه
+   290→    if (exchangeValue > total && transferAmount > 0)
+   291→      return "در حالت بدهی مشتری (جایگزین بیشتر از مرجوعی)، مبلغ قابل انتقال باید صفر باشد";
+   292→    if (exchangeValue <= total && transferAmount > total - exchangeValue)
+   293→      return "مبلغ قابل انتقال نمی‌تواند از «جمع اقلام منهای ارزش جایگزین» بیشتر باشد";
+   294→    if (noteRequired && transferNote.trim().length < 3)
+   295→      return "دلیل اختلاف مبلغ انتقالی با جمع اقلام را در توضیح تسویه بنویسید";
+   296→    return null;
+   297→  }
+   298→
+   299→  async function handleSubmit(e?: React.FormEvent) {
+   300→    e?.preventDefault();
+   301→    if (submitting) return;
+   302→    const err = validate();
+   303→    if (err) {
+   304→      toast.error(err, { description: "لطفاً فرم را کامل کنید" });
+   305→      return;
+   306→    }
+   307→    setSubmitting(true);
+   308→    try {
+   309→      const res = await fetch("/api/returns", {
+   310→        method: "POST",
+   311→        headers: { "Content-Type": "application/json" },
+   312→        body: JSON.stringify({
+   313→          customerName: customerName.trim(),
+   314→          customerPhone: digitsOnly(customerPhone),
+   315→          customerCardNumber: digitsOnly(customerCard),
+   316→          purchaseAt: purchaseAt?.toISOString(),
+   317→          reason: reason === "سایر" ? note.trim() || "سایر" : reason,
+   318→          note: note.trim() || null,
+   319→          exchangeValue,
+   320→          transferAmount,
+   321→          transferNote: transferNote.trim() || null,
+   322→          items: items.map((i) => ({
+   323→            productId: i.productId,
+   324→            name: i.name.trim(),
+   325→            barcode: digitsOnly(i.barcode ?? "") || null,
+   326→            code: i.code,
+   327→            quantity: i.quantity,
+   328→            unitPrice: i.unitPrice,
+   329→          })),
+   330→        }),
+   331→      });
+   332→      const data = await res.json();
+   333→      if (!res.ok) {
+   334→        toast.error(data.error || "ثبت مرجوعی ناموفق بود");
+   335→        return;
+   336→      }
+   337→      setSuccess({
+   338→        id: data.id,
+   339→        code: data.code,
+   340→        total: data.totalAmount,
+   341→        transfer: data.transferAmount ?? data.totalAmount,
+   342→        exchange: data.exchangeValue ?? 0,
+   343→        settlementType: (data.settlementType ?? "full") as SettlementType,
+   344→        count: data.itemCount,
+   345→        at: new Date(data.submittedAt),
+   346→      });
+   347→      setTodayCount((c) => c + 1);
+   348→      toast.success(`مرجوعی ${data.code} با موفقیت ثبت شد 🌿`, {
+   349→        description: "به آقای نوروزی اطلاع داده شد تا وجه را انتقال دهد",
+   350→      });
+   351→    } catch {
+   352→      toast.error("ارتباط با سرور برقرار نشد");
+   353→    } finally {
+   354→      setSubmitting(false);
+   355→    }
+   356→  }
+   357→
+   358→  function resetForm() {
+   359→    setCustomerName("");
+   360→    setCustomerPhone("");
+   361→    setCustomerCard("");
+   362→    setPurchaseAt(null);
+   363→    setReason("");
+   364→    setNote("");
+   365→    setItems([]);
+   366→    setBarcodeInput("");
+   367→    setExchangeValue(0);
+   368→    setTransferAmount(0);
+   369→    setTransferNote("");
+   370→    setSuccess(null);
+   371→    setTimeout(() => barcodeRef.current?.focus(), 100);
+   372→  }
+   373→
+   374→  // میان‌بر: Ctrl+Enter برای ثبت سریع
+   375→  useEffect(() => {
+   376→    function onKey(e: KeyboardEvent) {
+   377→      if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && !success) {
+   378→        handleSubmit();
+   379→      }
+   380→    }
+   381→    window.addEventListener("keydown", onKey);
+   382→    return () => window.removeEventListener("keydown", onKey);
+   383→  });
+   384→
+   385→  // ----- صفحه موفقیت -----
+   386→  if (success) {
+   387→    return (
+   388→      <motion.div
+   389→        initial={{ opacity: 0, scale: 0.96 }}
+   390→        animate={{ opacity: 1, scale: 1 }}
+   391→        className="max-w-2xl mx-auto"
+   392→      >
+   393→        <div className="rounded-3xl border border-primary/30 bg-card shadow-2xl overflow-hidden">
+   394→          <div className="arch pattern-tile bg-primary/10 px-8 pt-12 pb-8 text-center relative">
+   395→            <motion.div
+   396→              initial={{ scale: 0 }}
+   397→              animate={{ scale: 1 }}
+   398→              transition={{ type: "spring", delay: 0.15 }}
+   399→              className="mx-auto mb-4 size-20 rounded-full bg-primary/20 border-2 border-primary/40 flex items-center justify-center"
+   400→            >
+   401→              <CheckCircle2 className="size-10 text-primary" />
+   402→            </motion.div>
+   403→            <h2 className="text-2xl font-extrabold">مرجوعی ثبت شد</h2>
+   404→            <p className="text-sm text-muted-foreground mt-2">
+   405→              درخواست برای انتقال وجه به آقای نوروزی ارسال شد
+   406→            </p>
+   407→          </div>
+   408→          <div className="p-8 space-y-5">
+   409→            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-center">
+   410→              <div className="rounded-xl bg-muted/60 p-4">
+   411→                <p className="text-xs text-muted-foreground mb-1">شماره پیگیری</p>
+   412→                <p className="num font-extrabold text-primary" dir="ltr">{success.code}</p>
+   413→              </div>
+   414→              <div className="rounded-xl bg-muted/60 p-4">
+   415→                <p className="text-xs text-muted-foreground mb-1">تعداد اقلام</p>
+   416→                <p className="num font-extrabold">{toFaDigits(success.count)}</p>
+   417→              </div>
+   418→              <div className="rounded-xl bg-muted/60 p-4">
+   419→                <p className="text-xs text-muted-foreground mb-1">زمان ثبت</p>
+   420→                <p className="text-sm font-bold leading-6">{formatJalaliFull(success.at)}</p>
+   421→              </div>
+   422→            </div>
+   423→            <div className="rounded-xl border border-primary/25 bg-primary/5 p-4">
+   424→              <MoneyDisplay amount={success.transfer} size="lg" />
+   425→              {success.transfer !== success.total && (
+   426→                <div className="mt-3 pt-3 border-t border-primary/20 flex flex-wrap items-center gap-2 text-xs">
+   427→                  <Badge variant="secondary" className="gap-1">
+   428→                    <ArrowLeftRight className="size-3" />
+   429→                    {SETTLEMENT_META[success.settlementType]?.label ?? success.settlementType}
+   430→                  </Badge>
+   431→                  <span className="text-muted-foreground num">
+   432→                    جمع اقلام: {formatMoney(success.total)} ریال
+   433→                    {success.exchange > 0 &&
+   434→                      ` — کالای جایگزین: ${formatMoney(success.exchange)} ریال`}
+   435→                  </span>
+   436→                </div>
+   437→              )}
+   438→            </div>
+   439→            <div className="flex flex-col sm:flex-row gap-3">
+   440→              <Button size="lg" className="flex-1 font-bold" onClick={resetForm}>
+   441→                <RotateCcw className="size-5" />
+   442→                ثبت مرجوعی جدید
+   443→              </Button>
+   444→              <Button
+   445→                size="lg"
+   446→                variant="outline"
+   447→                className="flex-1 font-bold"
+   448→                onClick={printReceiptNow}
+   449→                disabled={receiptLoading}
+   450→              >
+   451→                {receiptLoading ? (
+   452→                  <Loader2 className="size-5 animate-spin text-primary" />
+   453→                ) : (
+   454→                  <Printer className="size-5 text-primary" />
+   455→                )}
+   456→                چاپ رسید مرجوعی
+   457→              </Button>
+   458→            </div>
+   459→            <p className="text-center text-xs text-muted-foreground">
+   460→              امروز {toFaDigits(todayCount)} مرجوعی ثبت کرده‌اید — دست شما درد نکند 🌿
+   461→            </p>
+   462→          </div>
+   463→        </div>
+   464→        <ReceiptDialog open={receiptOpen} onOpenChange={setReceiptOpen} detail={receiptDetail} />
+   465→      </motion.div>
+   466→    );
+   467→  }
+   468→
+   469→  // ----- فرم اصلی -----
+   470→  return (
+   471→    <form onSubmit={handleSubmit} className="grid lg:grid-cols-[1fr_340px] gap-6 items-start">
+   472→      <div className="space-y-6 min-w-0">
+   473→        {/* بخش ۱: اطلاعات مشتری */}
+   474→        <section className="rounded-2xl border bg-card shadow-sm overflow-hidden" aria-labelledby="sec-customer">
+   475→          <header className="flex items-center gap-2.5 px-5 py-4 border-b bg-muted/40">
+   476→            <span className="flex size-9 items-center justify-center rounded-xl bg-primary/15 text-primary font-extrabold num">
+   477→              ۱
+   478→            </span>
+   479→            <h2 id="sec-customer" className="font-bold">
+   480→              اطلاعات مشتری
+   481→            </h2>
+   482→          </header>
+   483→          <div className="p-5 grid sm:grid-cols-2 gap-5">
+   484→            <div className="space-y-2">
+   485→              <Label htmlFor="cname" className="flex items-center gap-1.5">
+   486→                <UserRound className="size-3.5 text-primary" />
+   487→                نام و نام خانوادگی مشتری
+   488→              </Label>
+   489→              <Input
+   490→                id="cname"
+   491→                placeholder="مثال: مریم حسینی"
+   492→                className="h-11"
+   493→                value={customerName}
+   494→                onChange={(e) => setCustomerName(e.target.value)}
+   495→                maxLength={120}
+   496→              />
+   497→            </div>
+   498→            <div className="space-y-2">
+   499→              <Label htmlFor="cphone" className="flex items-center gap-1.5">
+   500→                <Phone className="size-3.5 text-primary" />
+   501→                شماره موبایل مشتری
+   502→              </Label>
+   503→              <Input
+   504→                id="cphone"
+   505→                dir="ltr"
+   506→                inputMode="numeric"
+   507→                placeholder="09xxxxxxxxx"
+   508→                className={`num text-left h-11 ${customerPhone && !phoneOk ? "border-destructive/60 focus-visible:ring-destructive/30" : ""}`}
+   509→                value={customerPhone ? toFaDigits(digitsOnly(customerPhone)) : ""}
+   510→                onChange={(e) => setCustomerPhone(digitsOnly(e.target.value).slice(0, 11))}
+   511→                aria-invalid={!!customerPhone && !phoneOk}
+   512→              />
+   513→              {customerPhone && (
+   514→                <p className={`text-[11px] ${phoneOk ? "text-primary" : "text-destructive"}`}>
+   515→                  {phoneOk ? "✓ شماره موبایل معتبر است" : "شماره باید ۱۱ رقم و با ۰۹ شروع شود"}
+   516→                </p>
+   517→              )}
+   518→              {/* شناسایی خودکار مشتری — سابقه مرجوعی‌های قبلی */}
+   519→              {customerLookup && (
+   520→                <div className="rounded-xl border border-primary/25 bg-primary/[0.06] p-3 space-y-2">
+   521→                  <div className="flex items-center justify-between gap-2 flex-wrap">
+   522→                    <p className="text-xs font-bold flex items-center gap-1.5 text-primary">
+   523→                      <UserRoundSearch className="size-4" />
+   524→                      مشتری شناسایی شد: {customerLookup.name}
+   525→                    </p>
+   526→                    <button
+   527→                      type="button"
+   528→                      onClick={() => setCustomerHistoryOpen(true)}
+   529→                      className="text-[11px] font-bold text-primary underline underline-offset-4 hover:text-primary/80 transition-colors h-8 px-1"
+   530→                    >
+   531→                      مشاهده سابقه کامل ←
+   532→                    </button>
+   533→                  </div>
+   534→                  <div className="flex items-center gap-2 flex-wrap text-[11px]">
+   535→                    <span className="rounded-full bg-primary/10 border border-primary/20 px-2.5 py-1 num font-semibold">
+   536→                      {customerLookup.returnCount.toLocaleString("fa-IR")} مرجوعی سابقه
+   537→                    </span>
+   538→                    {customerLookup.pendingCount > 0 && (
+   539→                      <span className="rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-700 dark:text-amber-400 px-2.5 py-1 num font-semibold">
+   540→                        {customerLookup.pendingCount.toLocaleString("fa-IR")} در انتظار پرداخت
+   541→                      </span>
+   542→                    )}
+   543→                    {customerLookup.creditTotal > 0 && (
+   544→                      <span className="rounded-full bg-chart-1/10 border border-chart-1/30 text-chart-1 px-2.5 py-1 num font-semibold">
+   545→                        اعتبار نزد فروشگاه: {formatMoney(customerLookup.creditTotal)} ریال
+   546→                      </span>
+   547→                    )}
+   548→                    {customerLookup.debtTotal > 0 && (
+   549→                      <span className="rounded-full bg-destructive/10 border border-destructive/30 text-destructive px-2.5 py-1 num font-semibold">
+   550→                        بدهی به فروشگاه: {formatMoney(customerLookup.debtTotal)} ریال
+   551→                      </span>
+   552→                    )}
+   553→                  </div>
+   554→                  {customerLookup.lastAt && (
+   555→                    <p className="text-[10px] text-muted-foreground num">
+   556→                      آخرین مرجوعی: {formatJalaliDateTime(new Date(customerLookup.lastAt))}
+   557→                    </p>
+   558→                  )}
+   559→                </div>
+   560→              )}
+   561→            </div>
+   562→            <div className="space-y-2">
+   563→              <Label className="flex items-center gap-1.5">
+   564→                <History className="size-3.5 text-primary" />
+   565→                زمان خرید مشتری
+   566→              </Label>
+   567→              <JalaliDateTimePicker
+   568→                value={purchaseAt}
+   569→                onChange={setPurchaseAt}
+   570→                placeholder="انتخاب زمان خرید (تقویم شمسی)"
+   571→              />
+   572→              {purchaseAt && (
+   573→                <p className="text-[11px] text-muted-foreground num">{formatJalaliFull(purchaseAt)}</p>
+   574→              )}
+   575→            </div>
+   576→            <div className="space-y-2">
+   577→              <Label htmlFor="ccard" className="flex items-center gap-1.5">
+   578→                <CreditCard className="size-3.5 text-primary" />
+   579→                شماره کارت بانکی مشتری
+   580→                <span className="text-[10px] text-muted-foreground font-normal">
+   581→                  (برای بازگشت وجه)
+   582→                </span>
+   583→              </Label>
+   584→              <Input
+   585→                id="ccard"
+   586→                dir="ltr"
+   587→                inputMode="numeric"
+   588→                placeholder="1234-5678-9012-3456"
+   589→                className={`num text-left tracking-wider h-11 ${customerCard && !cardOk ? "border-destructive/60 focus-visible:ring-destructive/30" : ""}`}
+   590→                value={customerCard ? formatCardNumber(customerCard) : ""}
+   591→                onChange={(e) => setCustomerCard(digitsOnly(e.target.value).slice(0, 16))}
+   592→                aria-invalid={!!customerCard && !cardOk}
+   593→              />
+   594→              {customerCard && (
+   595→                <div className="flex items-center gap-2 flex-wrap min-h-5">
+   596→                  {bankName && (
+   597→                    <Badge variant="secondary" className="text-[10px] gap-1">
+   598→                      <Landmark className="size-3" />
+   599→                      {bankName}
+   600→                    </Badge>
+   601→                  )}
+   602→                  <span className={`text-[11px] ${cardOk ? "text-primary" : "text-destructive"}`}>
+   603→                    {cardOk
+   604→                      ? "✓ شماره کارت معتبر است"
+   605→                      : `(${toFaDigits(customerCard.length)} از ۱۶ رقم) شماره کارت معتبر نیست`}
+   606→                  </span>
+   607→                </div>
+   608→              )}
+   609→            </div>
+   610→          </div>
+   611→        </section>
+   612→
+   613→        {/* بخش ۲: اقلام مرجوعی */}
+   614→        <section className="rounded-2xl border bg-card shadow-sm overflow-hidden" aria-labelledby="sec-items">
+   615→          <header className="flex items-center gap-2.5 px-5 py-4 border-b bg-muted/40">
+   616→            <span className="flex size-9 items-center justify-center rounded-xl bg-primary/15 text-primary font-extrabold num">
+   617→              ۲
+   618→            </span>
+   619→            <h2 id="sec-items" className="font-bold">
+   620→              اقلام مرجوعی
+   621→            </h2>
+   622→            <Badge variant="outline" className="num mr-auto">
+   623→              {toFaDigits(items.length)} قلم
+   624→            </Badge>
+   625→          </header>
+   626→          <div className="p-5 space-y-5">
+   627→            {/* اسکن بارکد */}
+   628→            <div className="rounded-xl border-2 border-dashed border-primary/40 bg-primary/5 p-4">
+   629→              <div className="flex flex-wrap items-center justify-between gap-2">
+   630→                <Label htmlFor="barcode" className="flex items-center gap-1.5 mb-2 font-bold text-primary">
+   631→                  <ScanLine className="size-4" />
+   632→                  اسکن بارکد کالا
+   633→                  <span className="text-[10px] font-normal text-muted-foreground">
+   634→                    (اسکنر را وصل کنید و بارکد را بگیرید)
+   635→                  </span>
+   636→                </Label>
+   637→                <Button
+   638→                  type="button"
+   639→                  variant="secondary"
+   640→                  size="sm"
+   641→                  className="mb-2 h-11 sm:h-9 gap-1.5 border border-primary/30 bg-primary/10 text-primary hover:bg-primary/20"
+   642→                  onClick={() => setCameraOpen(true)}
+   643→                >
+   644→                  <Camera className="size-4" />
+   645→                  اسکن با دوربین
+   646→                </Button>
+   647→              </div>
+   648→              <div className="relative">
+   649→                <Input
+   650→                  id="barcode"
+   651→                  ref={barcodeRef}
+   652→                  autoFocus
+   653→                  dir="ltr"
+   654→                  inputMode="numeric"
+   655→                  placeholder="بارکد را اسکن کنید یا تایپ کنید و Enter بزنید…"
+   656→                  className="num text-left text-lg font-bold tracking-widest h-14 pr-12 border-primary/40 focus-visible:ring-primary/30 bg-background"
+   657→                  value={barcodeInput ? toFaDigits(barcodeInput) : ""}
+   658→                  onChange={(e) => setBarcodeInput(digitsOnly(e.target.value))}
+   659→                  onKeyDown={handleBarcode}
+   660→                  disabled={scanning}
+   661→                />
+   662→                <ScanLine
+   663→                  className={`absolute right-4 top-1/2 -translate-y-1/2 size-5 ${scanning ? "text-primary animate-pulse" : "text-muted-foreground"}`}
+   664→                />
+   665→                {barcodeInput && (
+   666→                  <Button
+   667→                    type="button"
+   668→                    variant="ghost"
+   669→                    size="sm"
+   670→                    className="absolute left-2 top-1/2 -translate-y-1/2 h-8"
+   671→                    onClick={() => {
+   672→                      const ev = { key: "Enter", preventDefault: () => {} } as React.KeyboardEvent<HTMLInputElement>;
+   673→                      handleBarcode(ev);
+   674→                    }}
+   675→                  >
+   676→                    {scanning ? <Loader2 className="size-4 animate-spin" /> : <Search className="size-4" />}
+   677→                    جستجو
+   678→                  </Button>
+   679→                )}
+   680→              </div>
+   681→            </div>
+   682→
+   683→            {/* جستجوی نام کالا */}
+   684→            <div className="flex flex-col sm:flex-row gap-3">
+   685→              <Popover open={searchOpen} onOpenChange={setSearchOpen}>
+   686→                <PopoverTrigger asChild>
+   687→                  <Button
+   688→                    type="button"
+   689→                    variant="outline"
+   690→                    className="w-full sm:w-auto sm:flex-1 h-12 justify-start text-muted-foreground font-normal"
+   691→                  >
+   692→                    <PackageSearch className="size-4 ml-2" />
+   693→                    {searchQuery ? searchQuery : "جستجوی سریع کالا از بانک کالا…"}
+   694→                  </Button>
+   695→                </PopoverTrigger>
+   696→                <PopoverContent className="w-[min(28rem,90vw)] p-0 z-50" align="start">
+   697→                  <Command shouldFilter={false}>
+   698→                    <CommandInput
+   699→                      placeholder="نام کالا را بنویسید (حداقل ۲ حرف)…"
+   700→                      value={searchQuery}
+   701→                      onValueChange={setSearchQuery}
+   702→                    />
+   703→                    <CommandList>
+   704→                      {searchLoading && (
+   705→                        <div className="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">
+   706→                          <Loader2 className="size-4 animate-spin" />
+   707→                          در حال جستجو…
+   708→                        </div>
+   709→                      )}
+   710→                      {!searchLoading && searchQuery.length >= 2 && searchResults.length === 0 && (
+   711→                        <CommandEmpty>
+   712→                          کالایی یافت نشد — می‌توانید «افزودن دستی» را بزنید
+   713→                        </CommandEmpty>
+   714→                      )}
+   715→                      {searchResults.length > 0 && (
+   716→                        <CommandGroup heading="نتایج بانک کالا">
+   717→                          {searchResults.map((p) => (
+   718→                            <CommandItem
+   719→                              key={p.id}
+   720→                              value={p.id}
+   721→                              onSelect={() => {
+   722→                                addItem(p);
+   723→                                setSearchOpen(false);
+   724→                                setSearchQuery("");
+   725→                                toast.success(`افزوده شد: ${p.name}`);
+   726→                              }}
+   727→                              className="gap-3 py-2.5"
+   728→                            >
+   729→                              <div className="flex-1 min-w-0">
+   730→                                <p className="font-semibold truncate">{p.name}</p>
+   731→                                <p className="text-[11px] text-muted-foreground num flex gap-2 flex-wrap">
+   732→                                  {p.barcode && <span dir="ltr">بارکد: {toFaDigits(p.barcode)}</span>}
+   733→                                  {p.category && <span>{p.category}</span>}
+   734→                                </p>
+   735→                              </div>
+   736→                              <Badge variant="secondary" className="num shrink-0">
+   737→                                {formatMoney(p.price)} ریال
+   738→                              </Badge>
+   739→                            </CommandItem>
+   740→                          ))}
+   741→                        </CommandGroup>
+   742→                      )}
+   743→                    </CommandList>
+   744→                  </Command>
+   745→                </PopoverContent>
+   746→              </Popover>
+   747→              <Button
+   748→                type="button"
+   749→                variant="secondary"
+   750→                className="h-12 font-semibold shrink-0"
+   751→                onClick={() => {
+   752→                  addItem(null, true);
+   753→                  toast.info("ردیف دستی اضافه شد — نام و قیمت را وارد کنید");
+   754→                }}
+   755→              >
+   756→                <Plus className="size-4" />
+   757→                افزودن دستی
+   758→              </Button>
+   759→            </div>
+   760→
+   761→            {/* جدول اقلام */}
+   762→            <div className="space-y-3">
+   763→              <AnimatePresence initial={false}>
+   764→                {items.map((item, idx) => (
+   765→                  <motion.div
+   766→                    key={item.key}
+   767→                    initial={{ opacity: 0, y: -12, height: 0 }}
+   768→                    animate={{ opacity: 1, y: 0, height: "auto" }}
+   769→                    exit={{ opacity: 0, x: 40, height: 0, marginBottom: 0 }}
+   770→                    transition={{ duration: 0.22 }}
+   771→                    className={`rounded-xl border p-4 ${item.fromDb ? "border-primary/25 bg-primary/5" : "border-dashed bg-muted/20"}`}
+   772→                  >
+   773→                    <div className="flex items-start gap-3">
+   774→                      <span className="num flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/15 text-primary font-extrabold text-sm mt-1">
+   775→                        {toFaDigits(idx + 1)}
+   776→                      </span>
+   777→                      <div className="flex-1 grid gap-3 min-w-0">
+   778→                        <div className="grid sm:grid-cols-[1fr_auto] gap-3">
+   779→                          <div className="space-y-1.5 min-w-0">
+   780→                            <Label className="text-[11px] text-muted-foreground">نام کالا</Label>
+   781→                            {item.fromDb ? (
+   782→                              <div className="flex items-center gap-2 flex-wrap">
+   783→                                <p className="font-bold leading-6">{item.name}</p>
+   784→                                {item.code && (
+   785→                                  <Badge variant="outline" className="num text-[10px]">
+   786→                                    کد: {toFaDigits(item.code)}
+   787→                                  </Badge>
+   788→                                )}
+   789→                              </div>
+   790→                            ) : (
+   791→                              <Input
+   792→                                placeholder="نام کالا را بنویسید…"
+   793→                                className="h-10"
+   794→                                value={item.name}
+   795→                                onChange={(e) => updateItem(item.key, { name: e.target.value })}
+   796→                                maxLength={200}
+   797→                              />
+   798→                            )}
+   799→                            {/* بارکد — هر قلم مرجوعی بارکد دارد (بانک کالا، دستی یا تولید داخلی) */}
+   800→                            {item.barcodeLocked && item.barcode ? (
+   801→                              <div className="flex items-center gap-2 flex-wrap pt-0.5">
+   802→                                <Badge variant="outline" className="num text-[10px] gap-1 border-primary/30 text-primary" dir="ltr">
+   803→                                  <Barcode className="size-3" />
+   804→                                  {toFaDigits(item.barcode)}
+   805→                                </Badge>
+   806→                                <span className="text-[10px] text-muted-foreground">از بانک کالا</span>
+   807→                              </div>
+   808→                            ) : (
+   809→                              <div className="space-y-1 pt-0.5">
+   810→                                <div className="flex items-center gap-1.5">
+   811→                                  <Input
+   812→                                    dir="ltr"
+   813→                                    inputMode="numeric"
+   814→                                    placeholder="بارکد کالا…"
+   815→                                    className="num text-left h-9 text-xs tracking-wider flex-1"
+   816→                                    value={item.barcode ? toFaDigits(item.barcode) : ""}
+   817→                                    onChange={(e) =>
+   818→                                      updateItem(item.key, {
+   819→                                        barcode: digitsOnly(e.target.value).slice(0, 14) || null,
+   820→                                      })
+   821→                                    }
+   822→                                    aria-label={`بارکد ${item.name || "کالا"}`}
+   823→                                  />
+   824→                                  <Button
+   825→                                    type="button"
+   826→                                    variant="outline"
+   827→                                    size="sm"
+   828→                                    className="h-9 shrink-0 gap-1 text-[11px]"
+   829→                                    onClick={() => {
+   830→                                      const bc = generateInternalBarcode();
+   831→                                      updateItem(item.key, { barcode: bc });
+   832→                                      toast.success("بارکد داخلی EAN-13 تولید شد", {
+   833→                                        description: `شماره: ${toFaDigits(bc)} — قابل چاپ روی برگه مرجوعی`,
+   834→                                      });
+   835→                                    }}
+   836→                                  >
+   837→                                    <Wand2 className="size-3.5 text-primary" />
+   838→                                    تولید
+   839→                                  </Button>
+   840→                                </div>
+   841→                                <p className="text-[10px] text-muted-foreground leading-4">
+   842→                                  {item.barcode && digitsOnly(item.barcode).length >= 4
+   843→                                    ? item.barcode.startsWith("2")
+   844→                                      ? "بارکد داخلی فروشگاه (پیش‌شماره ۲) — روی برگه مرجوعی چاپ می‌شود"
+   845→                                      : "بارکد ثبت‌شده برای این قلم"
+   846→                                    : "بارکد الزامی است — اگر کالا بارکد ندارد، دکمه «تولید» بارکد داخلی می‌سازد"}
+   847→                                </p>
+   848→                              </div>
+   849→                            )}
+   850→                          </div>
+   851→                          <div className="flex items-center gap-2 sm:flex-col sm:items-end">
+   852→                            {/* تعداد */}
+   853→                            <div className="flex items-center gap-1.5" role="group" aria-label="تعداد">
+   854→                              <Button
+   855→                                type="button"
+   856→                                variant="outline"
+   857→                                size="icon"
+   858→                                className="size-9 rounded-lg"
+   859→                                onClick={() =>
+   860→                                  updateItem(item.key, { quantity: Math.max(1, item.quantity - 1) })
+   861→                                }
+   862→                                aria-label="کاهش تعداد"
+   863→                              >
+   864→                                <Minus className="size-4" />
+   865→                              </Button>
+   866→                              <input
+   867→                                aria-label="تعداد"
+   868→                                inputMode="numeric"
+   869→                                className="num w-14 h-9 text-center rounded-lg border bg-transparent font-bold focus:outline-none focus:ring-2 focus:ring-primary/40"
+   870→                                value={toFaDigits(item.quantity)}
+   871→                                onChange={(e) =>
+   872→                                  updateItem(item.key, {
+   873→                                    quantity: Math.min(999, Math.max(1, parseInt(toEnDigits(e.target.value) || "1", 10) || 1)),
+   874→                                  })
+   875→                                }
+   876→                              />
+   877→                              <Button
+   878→                                type="button"
+   879→                                variant="outline"
+   880→                                size="icon"
+   881→                                className="size-9 rounded-lg"
+   882→                                onClick={() =>
+   883→                                  updateItem(item.key, { quantity: Math.min(999, item.quantity + 1) })
+   884→                                }
+   885→                                aria-label="افزایش تعداد"
+   886→                              >
+   887→                                <Plus className="size-4" />
+   888→                              </Button>
+   889→                            </div>
+   890→                            <Button
+   891→                              type="button"
+   892→                              variant="ghost"
+   893→                              size="icon"
+   894→                              className="text-destructive hover:text-destructive hover:bg-destructive/10 size-9"
+   895→                              onClick={() => removeItem(item.key)}
+   896→                              aria-label={`حذف ${item.name || "کالا"}`}
+   897→                            >
+   898→                              <Trash2 className="size-4" />
+   899→                            </Button>
+   900→                          </div>
+   901→                        </div>
+   902→                        <div className="grid sm:grid-cols-2 gap-3 items-start">
+   903→                          <div>
+   904→                            <Label className="text-[11px] text-muted-foreground mb-1.5 block">
+   905→                              قیمت واحد
+   906→                            </Label>
+   907→                            <MoneyInput
+   908→                              value={item.unitPrice}
+   909→                              onChange={(v) => updateItem(item.key, { unitPrice: v })}
+   910→                              placeholder="قیمت واحد (ریال)"
+   911→                            />
+   912→                          </div>
+   913→                          <div className="sm:text-end">
+   914→                            <Label className="text-[11px] text-muted-foreground mb-1.5 block">
+   915→                              مبلغ کل این ردیف
+   916→                            </Label>
+   917→                            <MoneyDisplay amount={item.quantity * item.unitPrice} showWords={false} />
+   918→                          </div>
+   919→                        </div>
+   920→                      </div>
+   921→                    </div>
+   922→                  </motion.div>
+   923→                ))}
+   924→              </AnimatePresence>
+   925→              {items.length === 0 && (
+   926→                <div className="rounded-xl border border-dashed py-10 text-center text-muted-foreground">
+   927→                  <PistachioMotif size={56} className="mx-auto mb-3 opacity-70" />
+   928→                  <p className="text-sm leading-7">
+   929→                    هنوز کالایی اضافه نشده است.
+   930→                    <br />
+   931→                    <span className="text-xs">
+   932→                      بارکد را اسکن کنید، از جستجوی کالا استفاده کنید یا ردیف دستی بسازید
+   933→                    </span>
+   934→                  </p>
+   935→                </div>
+   936→              )}
+   937→            </div>
+   938→          </div>
+   939→        </section>
+   940→
+   941→        {/* بخش ۳: دلیل مرجوعی */}
+   942→        <section className="rounded-2xl border bg-card shadow-sm overflow-hidden" aria-labelledby="sec-reason">
+   943→          <header className="flex items-center gap-2.5 px-5 py-4 border-b bg-muted/40">
+   944→            <span className="flex size-9 items-center justify-center rounded-xl bg-primary/15 text-primary font-extrabold num">
+   945→              ۳
+   946→            </span>
+   947→            <h2 id="sec-reason" className="font-bold">
+   948→              دلیل مرجوعی و توضیحات
+   949→            </h2>
+   950→          </header>
+   951→          <div className="p-5 space-y-4">
+   952→            <div className="space-y-2">
+   953→              <Label className="flex items-center gap-1.5">
+   954→                <MessageSquareText className="size-3.5 text-primary" />
+   955→                دلیل بازگشت کالا
+   956→              </Label>
+   957→              <Select value={reason} onValueChange={setReason}>
+   958→                <SelectTrigger className="h-11!">
+   959→                  <SelectValue placeholder="دلیل مرجوعی را انتخاب کنید…" />
+   960→                </SelectTrigger>
+   961→                <SelectContent>
+   962→                  {RETURN_REASONS.map((r) => (
+   963→                    <SelectItem key={r} value={r}>
+   964→                      {r}
+   965→                    </SelectItem>
+   966→                  ))}
+   967→                  <SelectItem value="سایر">سایر (در توضیحات بنویسید)</SelectItem>
+   968→                </SelectContent>
+   969→              </Select>
+   970→            </div>
+   971→            <div className="space-y-2">
+   972→              <Label htmlFor="note">توضیحات تکمیلی (اختیاری)</Label>
+   973→              <Textarea
+   974→                id="note"
+   975→                placeholder="هر نکته‌ای که آقای نوروزی باید بداند… مثلاً وضعیت بسته‌بندی یا شماره فاکتور"
+   976→                rows={3}
+   977→                value={note}
+   978→                onChange={(e) => setNote(e.target.value)}
+   979→                maxLength={500}
+   980→              />
+   981→              <p className="text-[11px] text-muted-foreground num">
+   982→                {toFaDigits(note.length)} / {toFaDigits(500)} نویسه
+   983→              </p>
+   984→            </div>
+   985→          </div>
+   986→        </section>
+   987→
+   988→        {/* بخش ۴: تسویه با مشتری */}
+   989→        <section className="rounded-2xl border bg-card shadow-sm overflow-hidden" aria-labelledby="sec-settlement">
+   990→          <header className="flex items-center gap-2.5 px-5 py-4 border-b bg-muted/40 flex-wrap">
+   991→            <span className="flex size-9 items-center justify-center rounded-xl bg-primary/15 text-primary font-extrabold num">
+   992→              ۴
+   993→            </span>
+   994→            <h2 id="sec-settlement" className="font-bold">
+   995→              تسویه با مشتری
+   996→            </h2>
+   997→            <Badge
+   998→              variant={settlementType === "debt" ? "destructive" : settlementType === "full" ? "default" : "secondary"}
+   999→              className="gap-1 mr-auto"
+  1000→            >
+  1001→              <ArrowLeftRight className="size-3" />
+  1002→              {SETTLEMENT_META[settlementType].label}
+  1003→            </Badge>
+  1004→          </header>
+  1005→          <div className="p-5 space-y-4">
+  1006→            <p className="text-xs text-muted-foreground leading-6 bg-muted/40 rounded-lg px-3 py-2.5">
+  1007→              اگر مشتری به‌جای وجه کامل، کالای جایگزین برداشته یا بیش از ارزش مرجوعی خرید کرده است،
+  1008→              مبلغ قابل انتقال را اینجا مشخص کنید. مبلغ پیش‌فرض = جمع اقلام منهای ارزش جایگزین.
+  1009→            </p>
+  1010→
+  1011→            <div className="grid sm:grid-cols-2 gap-4">
+  1012→              <div className="space-y-2">
+  1013→                <Label className="flex items-center gap-1.5">
+  1014→                  <Repeat2 className="size-3.5 text-chart-3" />
+  1015→                  ارزش کالا/خدمات جایگزین
+  1016→                  <span className="text-[10px] font-normal text-muted-foreground">(اختیاری)</span>
+  1017→                </Label>
+  1018→                <MoneyInput
+  1019→                  value={exchangeValue}
+  1020→                  onChange={setExchangeValue}
+  1021→                  placeholder="اگر مشتری کالای دیگری برداشته…"
+  1022→                />
+  1023→                <p className="text-[11px] text-muted-foreground leading-5">
+  1024→                  ارزش خریدهای جدیدی که مشتری همراه مرجوعی برداشته است
+  1025→                </p>
+  1026→              </div>
+  1027→              <div className="space-y-2">
+  1028→                <Label className="flex items-center gap-1.5">
+  1029→                  <Wallet className="size-3.5 text-primary" />
+  1030→                  مبلغ قابل انتقال به حساب مشتری
+  1031→                  <span className="text-[10px] font-normal text-primary">(الزامی)</span>
+  1032→                </Label>
+  1033→                <div className="flex gap-2">
+  1034→                  <div className="flex-1 min-w-0">
+  1035→                    <MoneyInput
+  1036→                      value={transferAmount}
+  1037→                      onChange={setTransferAmount}
+  1038→                      placeholder="مبلغ انتقالی (ریال)"
+  1039→                    />
+  1040→                  </div>
+  1041→                  <Button
+  1042→                    type="button"
+  1043→                    variant="outline"
+  1044→                    size="sm"
+  1045→                    className="h-10 shrink-0 gap-1 text-[11px]"
+  1046→                    onClick={() => setTransferAmount(Math.max(0, total - exchangeValue))}
+  1047→                    title="بازمحاسبه از جمع اقلام منهای جایگزین"
+  1048→                  >
+  1049→                    <RefreshCw className="size-3.5 text-primary" />
+  1050→                    همگام
+  1051→                  </Button>
+  1052→                </div>
+  1053→                <p className="text-[11px] text-muted-foreground leading-5 num">
+  1054→                  سقف مجاز: {formatMoney(Math.max(0, netAmount))} ریال
+  1055→                </p>
+  1056→              </div>
+  1057→            </div>
+  1058→
+  1059→            {/* کارت‌های محاسباتی */}
+  1060→            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+  1061→              <div className="rounded-xl bg-muted/60 p-3 text-center">
+  1062→                <p className="text-[10px] text-muted-foreground mb-1">جمع اقلام مرجوعی</p>
+  1063→                <p className="num font-extrabold text-sm">{formatMoney(total)}</p>
+  1064→                <p className="text-[10px] text-muted-foreground num">ریال</p>
+  1065→              </div>
+  1066→              <div className="rounded-xl bg-muted/60 p-3 text-center">
+  1067→                <p className="text-[10px] text-muted-foreground mb-1">مانده خالص حق مشتری</p>
+  1068→                <p className={`num font-extrabold text-sm ${netAmount < 0 ? "text-destructive" : ""}`}>
+  1069→                  {formatMoney(Math.abs(netAmount))}
+  1070→                </p>
+  1071→                <p className="text-[10px] text-muted-foreground">
+  1072→                  {netAmount < 0 ? "بدهی مشتری (ریال)" : "ریال"}
+  1073→                </p>
+  1074→              </div>
+  1075→              <div className="rounded-xl border border-primary/25 bg-primary/5 p-3 text-center col-span-2 sm:col-span-1">
+  1076→                <p className="text-[10px] text-muted-foreground mb-1">مبلغ قابل انتقال</p>
+  1077→                <p className="num font-extrabold text-sm text-primary">{formatMoney(Math.max(0, transferAmount))}</p>
+  1078→                <p className="text-[10px] text-muted-foreground num">ریال</p>
+  1079→              </div>
+  1080→            </div>
+  1081→
+  1082→            {/* هشدارهای تسویه */}
+  1083→            {customerDebt > 0 && (
+  1084→              <div className="rounded-xl border border-destructive/40 bg-destructive/10 p-3.5 flex items-start gap-2.5" role="alert">
+  1085→                <TriangleAlert className="size-4 text-destructive shrink-0 mt-0.5" />
+  1086→                <div className="text-xs leading-6">
+  1087→                  <p className="font-bold text-destructive">بدهی مشتری به فروشگاه</p>
+  1088→                  <p className="num text-destructive/90">
+  1089→                    {formatMoney(customerDebt)} ریال ({formatMoney(Math.floor(customerDebt / 10))} تومان)
+  1090→                  </p>
+  1091→                  <p className="text-muted-foreground mt-1">
+  1092→                    ارزش کالای جایگزین از جمع مرجوعی بیشتر است — مبلغ قابل انتقال باید صفر باشد و توضیح بدهی الزامی است.
+  1093→                  </p>
+  1094→                </div>
+  1095→              </div>
+  1096→            )}
+  1097→            {customerCredit > 0 && (
+  1098→              <div className="rounded-xl border border-chart-4/40 bg-chart-4/10 p-3.5 flex items-start gap-2.5" role="alert">
+  1099→                <Info className="size-4 text-chart-4 shrink-0 mt-0.5" />
+  1100→                <div className="text-xs leading-6">
+  1101→                  <p className="font-bold text-chart-4">کسری — اعتبار باقی‌مانده مشتری</p>
+  1102→                  <p className="num text-chart-4/90">
+  1103→                    {formatMoney(customerCredit)} ریال ({formatMoney(Math.floor(customerCredit / 10))} تومان)
+  1104→                  </p>
+  1105→                  <p className="text-muted-foreground mt-1">
+  1106→                    این مبلغ یا به‌صورت اعتبار نزد فروشگاه می‌ماند یا با توافق تسویه می‌شود — دلیل آن را در توضیح تسویه بنویسید.
+  1107→                  </p>
+  1108→                </div>
+  1109→              </div>
+  1110→            )}
+  1111→            {settlementType === "exchange" && customerDebt === 0 && (
+  1112→              <div className="rounded-xl border border-chart-3/40 bg-chart-3/10 p-3.5 flex items-start gap-2.5">
+  1113→                <Repeat2 className="size-4 text-chart-3 shrink-0 mt-0.5" />
+  1114→                <p className="text-xs leading-6">
+  1115→                  <span className="font-bold text-chart-3">تسویه با تبادل کالا</span>{" "}
+  1116→                  {transferAmount > 0
+  1117→                    ? "— کالای جایگزین + انتقال باقیمانده وجه"
+  1118→                    : "— بدون انتقال وجه؛ تسویه کامل با کالای جایگزین"}
+  1119→                </p>
+  1120→              </div>
+  1121→            )}
+  1122→
+  1123→            {/* دلیل اختلاف — الزامی در حالت کسری/بدهی */}
+  1124→            {noteRequired && (
+  1125→              <div className="space-y-2">
+  1126→                <Label htmlFor="tnote" className="flex items-center gap-1.5 text-destructive">
+  1127→                  <TriangleAlert className="size-3.5" />
+  1128→                  دلیل اختلاف مبلغ انتقالی (الزامی)
+  1129→                </Label>
+  1130→                <Textarea
+  1131→                  id="tnote"
+  1132→                  placeholder={
+  1133→                    customerDebt > 0
+  1134→                      ? "مثال: مشتری کالای جایگزین به ارزش بیشتری برداشت و توافق شد بدهی را بعداً بپردازد…"
+  1135→                      : "مثال: مابه‌التفاوت با کالای جایگزین، اعتبار نزد فروشگاه، کسری بسته‌بندی و…"
+  1136→                  }
+  1137→                  rows={3}
+  1138→                  value={transferNote}
+  1139→                  onChange={(e) => setTransferNote(e.target.value)}
+  1140→                  maxLength={500}
+  1141→                  className={transferNote.trim().length > 0 ? "" : "border-destructive/40"}
+  1142→                />
+  1143→                <p className="text-[11px] text-muted-foreground num">
+  1144→                  {toFaDigits(transferNote.length)} / {toFaDigits(500)} نویسه
+  1145→                  {transferNote.trim().length < 3 && " — توضیح برای اطلاع آقای نوروزی الزامی است"}
+  1146→                </p>
+  1147→              </div>
+  1148→            )}
+  1149→          </div>
+  1150→        </section>
+  1151→      </div>
+  1152→
+  1153→      {/* ستون خلاصه — چسبان */}
+  1154→      <aside className="lg:sticky lg:top-24 space-y-4" aria-label="خلاصه و ثبت">
+  1155→        <div className="rounded-2xl border border-primary/30 bg-card shadow-xl overflow-hidden">
+  1156→          <div className="pattern-tile bg-primary/10 px-5 py-4 border-b border-primary/20 flex items-center gap-2">
+  1157→            <Sparkles className="size-4 text-primary" />
+  1158→            <h3 className="font-bold text-sm">خلاصه مرجوعی</h3>
+  1159→          </div>
+  1160→          <div className="p-5 space-y-4">
+  1161→            {/* فیلدهای خودکار */}
+  1162→            <div className="space-y-2.5 text-sm">
+  1163→              <div className="flex items-center justify-between gap-2 rounded-lg bg-muted/50 px-3 py-2">
+  1164→                <span className="text-muted-foreground text-xs">صندوقدار ثبت‌کننده (خودکار)</span>
+  1165→                <span className="font-bold">{user.fullName}</span>
+  1166→              </div>
+  1167→              <div className="flex items-center justify-between gap-2 rounded-lg bg-muted/50 px-3 py-2">
+  1168→                <span className="text-muted-foreground text-xs">زمان ثبت (خودکار)</span>
+  1169→                <span className="font-bold text-xs">لحظه ثبت در سرور</span>
+  1170→              </div>
+  1171→              <div className="flex items-center justify-between gap-2 rounded-lg bg-muted/50 px-3 py-2">
+  1172→                <span className="text-muted-foreground text-xs">تعداد کل اقلام</span>
+  1173→                <span className="font-bold num">{toFaDigits(totalCount)} عدد</span>
+  1174→              </div>
+  1175→            </div>
+  1176→
+  1177→            <IlluminatedDivider />
+  1178→
+  1179→            <div>
+  1180→              <p className="text-xs text-muted-foreground mb-1.5">
+  1181→                {transferAmount !== total ? "جمع کل اقلام مرجوعی" : "جمع کل وجه قابل بازگشت"}
+  1182→              </p>
+  1183→              <MoneyDisplay amount={total} size="lg" />
+  1184→              {transferAmount !== total && (
+  1185→                <div className="mt-3 pt-3 border-t border-primary/20 space-y-2.5">
+  1186→                  <div className="flex items-center justify-between gap-2 flex-wrap">
+  1187→                    <span className="text-xs text-muted-foreground">مبلغ قابل انتقال</span>
+  1188→                    <Badge
+  1189→                      variant={settlementType === "debt" ? "destructive" : "secondary"}
+  1190→                      className="text-[10px] gap-1"
+  1191→                    >
+  1192→                      <ArrowLeftRight className="size-3" />
+  1193→                      {SETTLEMENT_META[settlementType].label}
+  1194→                    </Badge>
+  1195→                  </div>
+  1196→                  <MoneyDisplay amount={Math.max(0, transferAmount)} showWords={false} />
+  1197→                  {exchangeValue > 0 && (
+  1198→                    <p className="text-[11px] text-muted-foreground num leading-5">
+  1199→                      کالای جایگزین: {formatMoney(exchangeValue)} ریال
+  1200→                    </p>
+  1201→                  )}
+  1202→                  {customerDebt > 0 && (
+  1203→                    <p className="text-[11px] text-destructive num leading-5">
+  1204→                      بدهی مشتری: {formatMoney(customerDebt)} ریال
+  1205→                    </p>
+  1206→                  )}
+  1207→                  {customerCredit > 0 && (
+  1208→                    <p className="text-[11px] text-chart-4 num leading-5">
+  1209→                      اعتبار باقی‌مانده: {formatMoney(customerCredit)} ریال
+  1210→                    </p>
+  1211→                  )}
+  1212→                </div>
+  1213→              )}
+  1214→            </div>
+  1215→
+  1216→            <Button
+  1217→              type="submit"
+  1218→              size="lg"
+  1219→              className="w-full h-14 text-base font-extrabold"
+  1220→              disabled={submitting}
+  1221→            >
+  1222→              {submitting ? (
+  1223→                <>
+  1224→                  <Loader2 className="size-5 animate-spin" />
+  1225→                  در حال ارسال…
+  1226→                </>
+  1227→              ) : (
+  1228→                <>
+  1229→                  <Send className="size-5" />
+  1230→                  ثبت و ارسال به مدیریت
+  1231→                </>
+  1232→              )}
+  1233→            </Button>
+  1234→            <p className="text-center text-[11px] text-muted-foreground leading-5">
+  1235→              میان‌بر ثبت سریع: <kbd className="rounded border bg-muted px-1.5 py-0.5 num">Ctrl</kbd> +{" "}
+  1236→              <kbd className="rounded border bg-muted px-1.5 py-0.5 num">Enter</kbd>
+  1237→              <br />
+  1238→              پس از ثبت، آقای نوروزی برای تسویه و انتقال وجه مطلع می‌شود
+  1239→            </p>
+  1240→          </div>
+  1241→        </div>
+  1242→
+  1243→        {todayCount > 0 && (
+  1244→          <div className="rounded-2xl border bg-muted/40 px-5 py-4 flex items-center gap-3 text-sm">
+  1245→            <ClipboardList className="size-5 text-primary shrink-0" />
+  1246→            <span className="num">
+  1247→              امروز {toFaDigits(todayCount)} مرجوعی از این دستگاه ثبت شده است
+  1248→            </span>
+  1249→          </div>
+  1250→        )}
+  1251→      </aside>
+  1252→
+  1253→      {/* گفت‌وگوی سابقه کامل مشتری (از راهنمای شناسایی) */}
+  1254→      <CustomerHistoryDialog
+  1255→        open={customerHistoryOpen}
+  1256→        onOpenChange={setCustomerHistoryOpen}
+  1257→        phone={customerPhone}
+  1258→      />
+  1259→
+  1260→      {/* اسکنر بارکد با دوربین */}
+  1261→      <CameraScannerDialog
+  1262→        open={cameraOpen}
+  1263→        onOpenChange={setCameraOpen}
+  1264→        onDetected={handleCameraDetect}
+  1265→      />
+  1266→    </form>
+  1267→  );
+  1268→}
+  1269→

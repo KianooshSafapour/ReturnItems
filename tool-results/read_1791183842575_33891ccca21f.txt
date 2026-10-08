@@ -1,0 +1,955 @@
+     1→"use client";
+     2→
+     3→// منوی «حساب من» — آواتار شخصی (عکس/ایموجی/حروف)، ویرایش پروفایل، تغییر گذرواژه و خروج
+     4→import { useRef, useState } from "react";
+     5→import { Button } from "@/components/ui/button";
+     6→import { Input } from "@/components/ui/input";
+     7→import { Label } from "@/components/ui/label";
+     8→import { Badge } from "@/components/ui/badge";
+     9→import { Separator } from "@/components/ui/separator";
+    10→import {
+    11→  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+    12→} from "@/components/ui/dialog";
+    13→import {
+    14→  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
+    15→  DropdownMenuSeparator, DropdownMenuTrigger,
+    16→} from "@/components/ui/dropdown-menu";
+    17→import { toast } from "sonner";
+    18→import {
+    19→  UserCog, LogOut, Eye, EyeOff, Loader2, Lock, ShieldCheck, UserRound, KeyRound,
+    20→  Camera, ImagePlus, Type, Trash2, Palette, Brush, Dices, RotateCcw,
+    21→} from "lucide-react";
+    22→import { toEnDigits } from "@/lib/money";
+    23→import { digitsOnly } from "@/lib/validators";
+    24→import { ROLE_LABELS, type Role, type SessionUser } from "./types";
+    25→import {
+    26→  AvatarBadge, AVATAR_COLORS, parseAvatar,
+    27→} from "./avatar-badge";
+    28→import {
+    29→  DEFAULT_VECTOR_CONFIG, VectorAvatar, randomVectorConfig,
+    30→  VECTOR_BG_COLORS, VECTOR_BROW_STYLES, VECTOR_CLOTH_COLORS, VECTOR_CLOTHING_STYLES,
+    31→  VECTOR_EYE_STYLES, VECTOR_FACIAL_HAIR_STYLES, VECTOR_GLASSES_STYLES,
+    32→  VECTOR_HAIR_COLORS, VECTOR_HAIR_STYLES, VECTOR_MOUTH_STYLES, VECTOR_SKIN_TONES,
+    33→  type VectorAvatarConfig,
+    34→} from "./vector-avatar";
+    35→import { cn } from "@/lib/utils";
+    36→
+    37→interface PasswordErrors {
+    38→  current?: string;
+    39→  next?: string;
+    40→  repeat?: string;
+    41→}
+    42→
+    43→type AvatarMode = "vector" | "photo" | "initials";
+    44→
+    45→/** دسته‌های سازنده آواتار کارتونی */
+    46→const AVATAR_CREATOR_CATEGORIES = [
+    47→  { id: "skin", label: "پوست" },
+    48→  { id: "hair", label: "مو" },
+    49→  { id: "hairColor", label: "رنگ مو" },
+    50→  { id: "brows", label: "ابرو" },
+    51→  { id: "eyes", label: "چشم" },
+    52→  { id: "mouth", label: "لبخند" },
+    53→  { id: "glasses", label: "عینک" },
+    54→  { id: "facialHair", label: "ریش و سبیل" },
+    55→  { id: "clothing", label: "لباس" },
+    56→  { id: "clothColor", label: "رنگ لباس" },
+    57→  { id: "bg", label: "پس‌زمینه" },
+    58→] as const;
+    59→
+    60→type CreatorCategory = (typeof AVATAR_CREATOR_CATEGORIES)[number]["id"];
+    61→
+    62→/** دکمه گزینه سازنده آواتار (سبک‌ها) */
+    63→function CreatorOptionButton({
+    64→  label,
+    65→  active,
+    66→  onClick,
+    67→}: {
+    68→  label: string;
+    69→  active: boolean;
+    70→  onClick: () => void;
+    71→}) {
+    72→  return (
+    73→    <button
+    74→      type="button"
+    75→      onClick={onClick}
+    76→      className={cn(
+    77→        "rounded-lg border px-3 py-2.5 text-xs font-semibold transition-colors",
+    78→        active
+    79→          ? "border-primary/50 bg-primary/10 text-primary"
+    80→          : "border-border hover:bg-accent"
+    81→      )}
+    82→      aria-pressed={active}
+    83→    >
+    84→      {label}
+    85→    </button>
+    86→  );
+    87→}
+    88→
+    89→/** نشان نقش کاربر جاری — مدیر ارشد / مدیر فروشگاه / صندوقدار */
+    90→function RoleBadge({ role }: { role: Role }) {
+    91→  if (role === "admin")
+    92→    return (
+    93→      <Badge className="gap-1 border border-primary/30 bg-primary/10 text-primary">
+    94→        <ShieldCheck className="size-3" />
+    95→        {ROLE_LABELS.admin}
+    96→      </Badge>
+    97→    );
+    98→  if (role === "owner")
+    99→    return (
+   100→      <Badge className="gap-1 border border-chart-2/30 bg-chart-2/15 text-chart-2">
+   101→        <ShieldCheck className="size-3" />
+   102→        {ROLE_LABELS.owner}
+   103→      </Badge>
+   104→    );
+   105→  return <Badge variant="secondary">{ROLE_LABELS.cashier}</Badge>;
+   106→}
+   107→
+   108→/** کوچک‌سازی تصویر سمت کلاینت (۲۵۶×۲۵۶ JPEG) و تبدیل به dataURL */
+   109→function resizeImageFile(file: File): Promise<string> {
+   110→  return new Promise((resolve, reject) => {
+   111→    if (!file.type.startsWith("image/")) {
+   112→      reject(new Error("فایل انتخاب‌شده تصویر نیست"));
+   113→      return;
+   114→    }
+   115→    if (file.size > 15 * 1024 * 1024) {
+   116→      reject(new Error("حجم تصویر نباید بیشتر از ۱۵ مگابایت باشد"));
+   117→      return;
+   118→    }
+   119→    const reader = new FileReader();
+   120→    reader.onerror = () => reject(new Error("خواندن فایل ناموفق بود"));
+   121→    reader.onload = () => {
+   122→      const img = new Image();
+   123→      img.onerror = () => reject(new Error("تصویر قابل خواندن نیست"));
+   124→      img.onload = () => {
+   125→        const SIDE = 256;
+   126→        const canvas = document.createElement("canvas");
+   127→        // برش مربعی از مرکز تصویر
+   128→        const side = Math.min(img.width, img.height);
+   129→        const sx = (img.width - side) / 2;
+   130→        const sy = (img.height - side) / 2;
+   131→        canvas.width = SIDE;
+   132→        canvas.height = SIDE;
+   133→        const ctx = canvas.getContext("2d");
+   134→        if (!ctx) {
+   135→          reject(new Error("پردازش تصویر ناموفق بود"));
+   136→          return;
+   137→        }
+   138→        ctx.drawImage(img, sx, sy, side, side, 0, 0, SIDE, SIDE);
+   139→        resolve(canvas.toDataURL("image/jpeg", 0.85));
+   140→      };
+   141→      img.src = String(reader.result);
+   142→    };
+   143→    reader.readAsDataURL(file);
+   144→  });
+   145→}
+   146→
+   147→/** منوی حساب کاربری سربرگ — آواتار شخصی + تنظیمات شخصی و خروج */
+   148→export function ProfileMenu({
+   149→  user,
+   150→  onUserUpdated,
+   151→  onLogout,
+   152→}: {
+   153→  user: SessionUser;
+   154→  onUserUpdated?: (u: SessionUser) => void;
+   155→  onLogout?: () => void;
+   156→}) {
+   157→  const [dialogOpen, setDialogOpen] = useState(false);
+   158→
+   159→  // ---- مشخصات ----
+   160→  const [fullName, setFullName] = useState(user.fullName);
+   161→  const [phone, setPhone] = useState("");
+   162→  const [initialPhone, setInitialPhone] = useState<string | null>(null);
+   163→  const [profileErrors, setProfileErrors] = useState<{ fullName?: string; phone?: string }>({});
+   164→  const [savingProfile, setSavingProfile] = useState(false);
+   165→
+   166→  // ---- آواتار ----
+   167→  const fileRef = useRef<HTMLInputElement>(null);
+   168→  const savedAvatar = parseAvatar(user.avatar);
+   169→  const [avatarMode, setAvatarMode] = useState<AvatarMode>(
+   170→    savedAvatar?.type === "vector" ? "vector" : savedAvatar?.type === "photo" ? "photo" : "initials"
+   171→  );
+   172→  const [avatarColor, setAvatarColor] = useState(savedAvatar?.color ?? AVATAR_COLORS[0]);
+   173→  const [avatarPhoto, setAvatarPhoto] = useState(savedAvatar?.photo ?? "");
+   174→  // آواتار کارتونی دوبعدی — پیکربندی زنده
+   175→  const [vectorConfig, setVectorConfig] = useState<VectorAvatarConfig>(
+   176→    savedAvatar?.type === "vector" && savedAvatar.config
+   177→      ? savedAvatar.config
+   178→      : DEFAULT_VECTOR_CONFIG
+   179→  );
+   180→  const [creatorCategory, setCreatorCategory] = useState<CreatorCategory>("skin");
+   181→  const [savingAvatar, setSavingAvatar] = useState(false);
+   182→  const [processingPhoto, setProcessingPhoto] = useState(false);
+   183→
+   184→  // ---- تغییر گذرواژه ----
+   185→  const [currentPassword, setCurrentPassword] = useState("");
+   186→  const [newPassword, setNewPassword] = useState("");
+   187→  const [repeatPassword, setRepeatPassword] = useState("");
+   188→  const [showCurrent, setShowCurrent] = useState(false);
+   189→  const [showNew, setShowNew] = useState(false);
+   190→  const [showRepeat, setShowRepeat] = useState(false);
+   191→  const [passErrors, setPassErrors] = useState<PasswordErrors>({});
+   192→  const [changingPassword, setChangingPassword] = useState(false);
+   193→
+   194→  // بازکردن پنجره حساب من — بازنشانی فرم‌ها و دریافت مشخصات فعلی
+   195→  const openAccountDialog = () => {
+   196→    setFullName(user.fullName);
+   197→    setPhone("");
+   198→    setInitialPhone(null);
+   199→    setProfileErrors({});
+   200→    const av = parseAvatar(user.avatar);
+   201→    setAvatarMode(
+   202→      av?.type === "vector" ? "vector" : av?.type === "photo" ? "photo" : "initials"
+   203→    );
+   204→    setAvatarColor(av?.color ?? AVATAR_COLORS[0]);
+   205→    setAvatarPhoto(av?.photo ?? "");
+   206→    setVectorConfig(
+   207→      av?.type === "vector" && av.config ? av.config : DEFAULT_VECTOR_CONFIG
+   208→    );
+   209→    setCreatorCategory("skin");
+   210→    setCurrentPassword("");
+   211→    setNewPassword("");
+   212→    setRepeatPassword("");
+   213→    setShowCurrent(false);
+   214→    setShowNew(false);
+   215→    setShowRepeat(false);
+   216→    setPassErrors({});
+   217→    setDialogOpen(true);
+   218→
+   219→    fetch("/api/auth/profile")
+   220→      .then((r) => r.json())
+   221→      .then((d) => {
+   222→        if (d?.user) {
+   223→          setPhone(d.user.phone ?? "");
+   224→          setInitialPhone(d.user.phone ?? "");
+   225→        }
+   226→      })
+   227→      .catch(() => setInitialPhone(""));
+   228→  };
+   229→
+   230→  // ---- ذخیره مشخصات شخصی ----
+   231→  const saveProfile = async () => {
+   232→    if (savingProfile) return;
+   233→    const name = fullName.trim();
+   234→    const ph = digitsOnly(toEnDigits(phone));
+   235→
+   236→    const e: { fullName?: string; phone?: string } = {};
+   237→    if (name.length < 3) e.fullName = "نام کامل حداقل ۳ نویسه باشد";
+   238→    if (ph && !/^09\d{9}$/.test(ph)) e.phone = "شماره موبایل باید ۱۱ رقم و با ۰۹ شروع شود";
+   239→    setProfileErrors(e);
+   240→    if (Object.keys(e).length > 0) return;
+   241→
+   242→    // تنها فیلدهای تغییر‌یافته ارسال می‌شود
+   243→    const payload: Record<string, string> = {};
+   244→    if (name !== user.fullName) payload.fullName = name;
+   245→    // تا پیش از دریافت شماره فعلی، تغییر شماره ارسال نمی‌شود
+   246→    if (initialPhone !== null && ph !== initialPhone) payload.phone = ph;
+   247→
+   248→    if (Object.keys(payload).length === 0) {
+   249→      toast.info("تغییری برای ذخیره وجود ندارد");
+   250→      return;
+   251→    }
+   252→
+   253→    setSavingProfile(true);
+   254→    try {
+   255→      const res = await fetch("/api/auth/profile", {
+   256→        method: "PATCH",
+   257→        headers: { "Content-Type": "application/json" },
+   258→        body: JSON.stringify(payload),
+   259→      });
+   260→      const data = await res.json();
+   261→      if (res.ok) {
+   262→        toast.success("مشخصات شما به‌روزرسانی شد");
+   263→        setInitialPhone(ph);
+   264→        onUserUpdated?.({
+   265→          id: data.user.id,
+   266→          username: data.user.username,
+   267→          fullName: data.user.fullName,
+   268→          role: data.user.role,
+   269→          phone: data.user.phone ?? null,
+   270→          avatar: data.user.avatar ?? null,
+   271→        });
+   272→      } else {
+   273→        toast.error(data.error || "خطا در ذخیره مشخصات");
+   274→      }
+   275→    } catch {
+   276→      toast.error("خطا در ذخیره مشخصات");
+   277→    } finally {
+   278→      setSavingProfile(false);
+   279→    }
+   280→  };
+   281→
+   282→  // ---- انتخاب عکس شخصی و کوچک‌سازی ----
+   283→  async function handlePhotoPick(f: File | null) {
+   284→    if (!f) return;
+   285→    setProcessingPhoto(true);
+   286→    try {
+   287→      const dataUrl = await resizeImageFile(f);
+   288→      setAvatarPhoto(dataUrl);
+   289→      setAvatarMode("photo");
+   290→      toast.success("تصویر آماده ذخیره‌سازی است — «ذخیره آواتار» را بزنید");
+   291→    } catch (err) {
+   292→      toast.error(err instanceof Error ? err.message : "پردازش تصویر ناموفق بود");
+   293→    } finally {
+   294→      setProcessingPhoto(false);
+   295→      if (fileRef.current) fileRef.current.value = "";
+   296→    }
+   297→  }
+   298→
+   299→  // ---- ذخیره آواتار ----
+   300→  async function saveAvatar() {
+   301→    if (savingAvatar) return;
+   302→    const avatarJson =
+   303→      avatarMode === "vector"
+   304→        ? JSON.stringify({ type: "vector", config: vectorConfig })
+   305→        : avatarMode === "photo"
+   306→          ? avatarPhoto
+   307→            ? JSON.stringify({ type: "photo", photo: avatarPhoto })
+   308→            : null
+   309→          : JSON.stringify({ type: "initials", color: avatarColor });
+   310→
+   311→    setSavingAvatar(true);
+   312→    try {
+   313→      const res = await fetch("/api/auth/profile", {
+   314→        method: "PATCH",
+   315→        headers: { "Content-Type": "application/json" },
+   316→        body: JSON.stringify({ avatar: avatarJson }),
+   317→      });
+   318→      const data = await res.json();
+   319→      if (res.ok) {
+   320→        toast.success("آواتار شما به‌روزرسانی شد");
+   321→        onUserUpdated?.({
+   322→          id: user.id,
+   323→          username: user.username,
+   324→          fullName: user.fullName,
+   325→          role: user.role,
+   326→          avatar: data.user.avatar ?? null,
+   327→        });
+   328→      } else {
+   329→        toast.error(data.error || "خطا در ذخیره آواتار");
+   330→      }
+   331→    } catch {
+   332→      toast.error("خطا در ذخیره آواتار");
+   333→    } finally {
+   334→      setSavingAvatar(false);
+   335→    }
+   336→  }
+   337→
+   338→  // ---- تغییر گذرواژه ----
+   339→  const changePassword = async () => {
+   340→    if (changingPassword) return;
+   341→    const e: PasswordErrors = {};
+   342→    if (!currentPassword) e.current = "گذرواژه فعلی را وارد کنید";
+   343→    if (newPassword.length < 6) e.next = "گذرواژه جدید حداقل ۶ نویسه باشد";
+   344→    if (newPassword !== repeatPassword) e.repeat = "تکرار گذرواژه جدید مطابقت ندارد";
+   345→    setPassErrors(e);
+   346→    if (Object.keys(e).length > 0) return;
+   347→
+   348→    setChangingPassword(true);
+   349→    try {
+   350→      const res = await fetch("/api/auth/password", {
+   351→        method: "POST",
+   352→        headers: { "Content-Type": "application/json" },
+   353→        body: JSON.stringify({ currentPassword, newPassword }),
+   354→      });
+   355→      const data = await res.json();
+   356→      if (res.ok) {
+   357→        toast.success("گذرواژه با موفقیت تغییر کرد");
+   358→        setCurrentPassword("");
+   359→        setNewPassword("");
+   360→        setRepeatPassword("");
+   361→        setShowCurrent(false);
+   362→        setShowNew(false);
+   363→        setShowRepeat(false);
+   364→        setPassErrors({});
+   365→      } else {
+   366→        toast.error(data.error || "خطا در تغییر گذرواژه");
+   367→      }
+   368→    } catch {
+   369→      toast.error("خطا در تغییر گذرواژه");
+   370→    } finally {
+   371→      setChangingPassword(false);
+   372→    }
+   373→  };
+   374→
+   375→  return (
+   376→    <>
+   377→      <DropdownMenu dir="rtl">
+   378→        <DropdownMenuTrigger asChild>
+   379→          <Button
+   380→            variant="ghost"
+   381→            className="size-11 sm:size-9 shrink-0 rounded-full p-0 hover:bg-accent"
+   382→            aria-label="حساب کاربری من"
+   383→            title="حساب کاربری من"
+   384→          >
+   385→            <AvatarBadge fullName={user.fullName} avatar={user.avatar} size="md" />
+   386→          </Button>
+   387→        </DropdownMenuTrigger>
+   388→        <DropdownMenuContent align="end" className="min-w-56">
+   389→          {/* سربرگ: مشخصات کاربر جاری */}
+   390→          <DropdownMenuLabel className="font-normal p-0">
+   391→            <div className="flex items-center gap-3 px-2 py-2">
+   392→              <AvatarBadge fullName={user.fullName} avatar={user.avatar} size="md" />
+   393→              <div className="min-w-0 flex flex-col gap-0.5">
+   394→                <p className="text-sm font-bold truncate max-w-40">{user.fullName}</p>
+   395→                <p className="num text-[11px] text-muted-foreground truncate max-w-40" dir="ltr">
+   396→                  {user.username}
+   397→                </p>
+   398→              </div>
+   399→            </div>
+   400→            <div className="px-2 pb-2">
+   401→              <RoleBadge role={user.role} />
+   402→            </div>
+   403→          </DropdownMenuLabel>
+   404→          <DropdownMenuSeparator />
+   405→          <DropdownMenuItem onClick={openAccountDialog} className="gap-2 cursor-pointer">
+   406→            <UserCog className="size-4" />
+   407→            حساب من و امنیت
+   408→          </DropdownMenuItem>
+   409→          <DropdownMenuSeparator />
+   410→          <DropdownMenuItem onClick={() => onLogout?.()} variant="destructive" className="gap-2 cursor-pointer">
+   411→            <LogOut className="size-4" />
+   412→            خروج از حساب
+   413→          </DropdownMenuItem>
+   414→        </DropdownMenuContent>
+   415→      </DropdownMenu>
+   416→
+   417→      {/* پنجره حساب کاربری من */}
+   418→      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+   419→        <DialogContent
+   420→          dir="rtl"
+   421→          className="w-[calc(100vw-1.5rem)] sm:max-w-2xl max-h-[calc(100dvh-2rem)] overflow-y-auto"
+   422→        >
+   423→          <DialogHeader>
+   424→            <DialogTitle className="flex items-center gap-2">
+   425→              <UserCog className="size-5 text-primary" />
+   426→              حساب کاربری من
+   427→            </DialogTitle>
+   428→            <DialogDescription>
+   429→              آواتار شخصی، مشخصات و امنیت حساب شما.
+   430→            </DialogDescription>
+   431→          </DialogHeader>
+   432→
+   433→          <div className="space-y-5">
+   434→            {/* ---- بخش آواتار ---- */}
+   435→            <section className="space-y-4">
+   436→              <div className="flex items-center gap-2 text-sm font-bold text-primary">
+   437→                <Palette className="size-4" />
+   438→                آواتار من
+   439→              </div>
+   440→
+   441→              <div className="rounded-2xl border bg-muted/30 p-4 space-y-4">
+   442→                {/* انتخاب حالت */}
+   443→                <div className="grid grid-cols-3 gap-2">
+   444→                  {(
+   445→                    [
+   446→                      { id: "vector", label: "آواتار کارتونی", icon: Brush },
+   447→                      { id: "photo", label: "عکس شخصی", icon: ImagePlus },
+   448→                      { id: "initials", label: "حروف نام", icon: Type },
+   449→                    ] as const
+   450→                  ).map((m) => (
+   451→                    <button
+   452→                      key={m.id}
+   453→                      type="button"
+   454→                      onClick={() => setAvatarMode(m.id)}
+   455→                      className={cn(
+   456→                        "flex flex-col items-center gap-1.5 rounded-xl border px-2 py-3 text-xs font-semibold transition-colors",
+   457→                        avatarMode === m.id
+   458→                          ? "border-primary/50 bg-primary/10 text-primary"
+   459→                          : "border-border hover:bg-accent"
+   460→                      )}
+   461→                      aria-pressed={avatarMode === m.id}
+   462→                    >
+   463→                      <m.icon className="size-4" />
+   464→                      {m.label}
+   465→                    </button>
+   466→                  ))}
+   467→                </div>
+   468→
+   469→                {/* ---------- سازنده آواتار کارتونی ---------- */}
+   470→                {avatarMode === "vector" && (
+   471→                  <div className="space-y-4">
+   472→                    {/* پیش‌نمایش بزرگ + ابزارها */}
+   473→                    <div className="flex flex-col sm:flex-row items-center gap-4 rounded-xl border bg-background p-4">
+   474→                      <VectorAvatar config={vectorConfig} size="xxl" />
+   475→                      <div className="flex-1 w-full space-y-2.5">
+   476→                        <p className="text-xs leading-6 text-muted-foreground">
+   477→                          آواتار دوبعدی خودتان را بسازید — پوست، مو، چشم، لبخند، عینک و لباس را
+   478→                          انتخاب کنید. سبک فلت و سبک، بدون سنگین‌کردن سامانه.
+   479→                        </p>
+   480→                        <div className="flex flex-wrap gap-2">
+   481→                          <Button
+   482→                            type="button"
+   483→                            variant="outline"
+   484→                            size="sm"
+   485→                            className="gap-1.5 h-8"
+   486→                            onClick={() => setVectorConfig(randomVectorConfig())}
+   487→                          >
+   488→                            <Dices className="size-3.5" />
+   489→                            یک آواتار تصادفی بساز
+   490→                          </Button>
+   491→                          <Button
+   492→                            type="button"
+   493→                            variant="ghost"
+   494→                            size="sm"
+   495→                            className="gap-1.5 h-8"
+   496→                            onClick={() => setVectorConfig(DEFAULT_VECTOR_CONFIG)}
+   497→                          >
+   498→                            <RotateCcw className="size-3.5" />
+   499→                            بازنشانی
+   500→                          </Button>
+   501→                        </div>
+   502→                      </div>
+   503→                    </div>
+   504→
+   505→                    {/* دسته‌ها */}
+   506→                    <div className="flex flex-wrap gap-1.5" role="tablist" aria-label="دسته‌های آواتار">
+   507→                      {AVATAR_CREATOR_CATEGORIES.map((c) => (
+   508→                        <button
+   509→                          key={c.id}
+   510→                          type="button"
+   511→                          role="tab"
+   512→                          aria-selected={creatorCategory === c.id}
+   513→                          onClick={() => setCreatorCategory(c.id)}
+   514→                          className={cn(
+   515→                            "rounded-lg border px-2.5 py-1.5 text-[11px] font-bold transition-colors",
+   516→                            creatorCategory === c.id
+   517→                              ? "border-primary/50 bg-primary/10 text-primary"
+   518→                              : "border-border hover:bg-accent"
+   519→                          )}
+   520→                        >
+   521→                          {c.label}
+   522→                        </button>
+   523→                      ))}
+   524→                    </div>
+   525→
+   526→                    {/* گزینه‌های دسته فعال */}
+   527→                    <div className="rounded-xl border bg-background p-3 min-h-24">
+   528→                      {/* رنگ‌ها */}
+   529→                      {(creatorCategory === "skin" ||
+   530→                        creatorCategory === "hairColor" ||
+   531→                        creatorCategory === "clothColor" ||
+   532→                        creatorCategory === "bg") && (
+   533→                        <div className="flex flex-wrap gap-2.5">
+   534→                          {(
+   535→                            {
+   536→                              skin: VECTOR_SKIN_TONES,
+   537→                              hairColor: VECTOR_HAIR_COLORS,
+   538→                              clothColor: VECTOR_CLOTH_COLORS,
+   539→                              bg: VECTOR_BG_COLORS,
+   540→                            }[creatorCategory] as Array<{ value: string; label: string }>
+   541→                          ).map((opt) => (
+   542→                            <button
+   543→                              key={opt.value}
+   544→                              type="button"
+   545→                              onClick={() =>
+   546→                                setVectorConfig((c) => ({ ...c, [creatorCategory]: opt.value }))
+   547→                              }
+   548→                              className={cn(
+   549→                                "size-10 rounded-full border-2 transition-transform hover:scale-110",
+   550→                                (vectorConfig as unknown as Record<string, string>)[
+   551→                                  creatorCategory
+   552→                                ] === opt.value
+   553→                                  ? "border-foreground shadow-md scale-110"
+   554→                                  : "border-transparent"
+   555→                              )}
+   556→                              style={{ backgroundColor: opt.value }}
+   557→                              aria-label={opt.label}
+   558→                              aria-pressed={
+   559→                                (vectorConfig as unknown as Record<string, string>)[
+   560→                                  creatorCategory
+   561→                                ] === opt.value
+   562→                              }
+   563→                              title={opt.label}
+   564→                            />
+   565→                          ))}
+   566→                        </div>
+   567→                      )}
+   568→
+   569→                      {/* سبک‌ها */}
+   570→                      {creatorCategory === "hair" && (
+   571→                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+   572→                          {VECTOR_HAIR_STYLES.map((opt) => (
+   573→                            <button
+   574→                              key={opt.value}
+   575→                              type="button"
+   576→                              onClick={() =>
+   577→                                setVectorConfig((c) => ({ ...c, hair: opt.value }))
+   578→                              }
+   579→                              className={cn(
+   580→                                "flex items-center gap-2.5 rounded-lg border px-3 py-2.5 text-xs font-semibold transition-colors",
+   581→                                vectorConfig.hair === opt.value
+   582→                                  ? "border-primary/50 bg-primary/10 text-primary"
+   583→                                  : "border-border hover:bg-accent"
+   584→                              )}
+   585→                              aria-pressed={vectorConfig.hair === opt.value}
+   586→                            >
+   587→                              <VectorAvatar
+   588→                                config={{
+   589→                                  ...vectorConfig,
+   590→                                  hair: opt.value,
+   591→                                  eyes: "closed",
+   592→                                  mouth: "smile",
+   593→                                }}
+   594→                                size="sm"
+   595→                                className="!size-9 !rounded-lg"
+   596→                              />
+   597→                              {opt.label}
+   598→                            </button>
+   599→                          ))}
+   600→                        </div>
+   601→                      )}
+   602→
+   603→                      {creatorCategory === "eyes" && (
+   604→                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+   605→                          {VECTOR_EYE_STYLES.map((opt) => (
+   606→                            <CreatorOptionButton
+   607→                              key={opt.value}
+   608→                              label={opt.label}
+   609→                              active={vectorConfig.eyes === opt.value}
+   610→                              onClick={() => setVectorConfig((c) => ({ ...c, eyes: opt.value }))}
+   611→                            />
+   612→                          ))}
+   613→                        </div>
+   614→                      )}
+   615→                      {creatorCategory === "brows" && (
+   616→                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+   617→                          {VECTOR_BROW_STYLES.map((opt) => (
+   618→                            <CreatorOptionButton
+   619→                              key={opt.value}
+   620→                              label={opt.label}
+   621→                              active={vectorConfig.brows === opt.value}
+   622→                              onClick={() => setVectorConfig((c) => ({ ...c, brows: opt.value }))}
+   623→                            />
+   624→                          ))}
+   625→                        </div>
+   626→                      )}
+   627→                      {creatorCategory === "mouth" && (
+   628→                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+   629→                          {VECTOR_MOUTH_STYLES.map((opt) => (
+   630→                            <CreatorOptionButton
+   631→                              key={opt.value}
+   632→                              label={opt.label}
+   633→                              active={vectorConfig.mouth === opt.value}
+   634→                              onClick={() => setVectorConfig((c) => ({ ...c, mouth: opt.value }))}
+   635→                            />
+   636→                          ))}
+   637→                        </div>
+   638→                      )}
+   639→                      {creatorCategory === "glasses" && (
+   640→                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+   641→                          {VECTOR_GLASSES_STYLES.map((opt) => (
+   642→                            <CreatorOptionButton
+   643→                              key={opt.value}
+   644→                              label={opt.label}
+   645→                              active={vectorConfig.glasses === opt.value}
+   646→                              onClick={() => setVectorConfig((c) => ({ ...c, glasses: opt.value }))}
+   647→                            />
+   648→                          ))}
+   649→                        </div>
+   650→                      )}
+   651→                      {creatorCategory === "facialHair" && (
+   652→                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+   653→                          {VECTOR_FACIAL_HAIR_STYLES.map((opt) => (
+   654→                            <CreatorOptionButton
+   655→                              key={opt.value}
+   656→                              label={opt.label}
+   657→                              active={vectorConfig.facialHair === opt.value}
+   658→                              onClick={() =>
+   659→                                setVectorConfig((c) => ({ ...c, facialHair: opt.value }))
+   660→                              }
+   661→                            />
+   662→                          ))}
+   663→                        </div>
+   664→                      )}
+   665→                      {creatorCategory === "clothing" && (
+   666→                        <div className="grid grid-cols-3 gap-2">
+   667→                          {VECTOR_CLOTHING_STYLES.map((opt) => (
+   668→                            <CreatorOptionButton
+   669→                              key={opt.value}
+   670→                              label={opt.label}
+   671→                              active={vectorConfig.clothing === opt.value}
+   672→                              onClick={() =>
+   673→                                setVectorConfig((c) => ({ ...c, clothing: opt.value }))
+   674→                              }
+   675→                            />
+   676→                          ))}
+   677→                        </div>
+   678→                      )}
+   679→                    </div>
+   680→
+   681→                    <p className="text-[10px] text-muted-foreground leading-5">
+   682→                      پیش‌نمایش لحظه‌ای است؛ برای اعمال در سربرگ سامانه، «ذخیره آواتار» را بزنید.
+   683→                    </p>
+   684→                  </div>
+   685→                )}
+   686→
+   687→                {/* پالت رنگ — برای حروف نام */}
+   688→                {avatarMode === "initials" && (
+   689→                  <div className="flex flex-col items-center gap-3 rounded-xl border bg-background p-4">
+   690→                    <AvatarBadge
+   691→                      fullName={fullName || user.fullName}
+   692→                      avatar={JSON.stringify({ type: "initials", color: avatarColor })}
+   693→                      size="xl"
+   694→                    />
+   695→                    <div className="flex flex-wrap justify-center gap-2">
+   696→                      {AVATAR_COLORS.map((c) => (
+   697→                        <button
+   698→                          key={c}
+   699→                          type="button"
+   700→                          onClick={() => setAvatarColor(c)}
+   701→                          className={cn(
+   702→                            "size-8 rounded-full border-2 transition-transform hover:scale-110",
+   703→                            avatarColor === c ? "border-foreground shadow-md" : "border-transparent"
+   704→                          )}
+   705→                          style={{ backgroundColor: c }}
+   706→                          aria-label={`رنگ ${c}`}
+   707→                          aria-pressed={avatarColor === c}
+   708→                        />
+   709→                      ))}
+   710→                    </div>
+   711→                  </div>
+   712→                )}
+   713→
+   714→                {/* بارگذاری عکس شخصی */}
+   715→                {avatarMode === "photo" && (
+   716→                  <div className="space-y-3">
+   717→                    <input
+   718→                      ref={fileRef}
+   719→                      type="file"
+   720→                      accept="image/*"
+   721→                      className="hidden"
+   722→                      onChange={(e) => handlePhotoPick(e.target.files?.[0] ?? null)}
+   723→                    />
+   724→                    <div className="flex flex-col sm:flex-row gap-2">
+   725→                      <Button
+   726→                        type="button"
+   727→                        variant="outline"
+   728→                        className="gap-1.5 flex-1"
+   729→                        onClick={() => fileRef.current?.click()}
+   730→                        disabled={processingPhoto}
+   731→                      >
+   732→                        {processingPhoto ? (
+   733→                          <Loader2 className="size-4 animate-spin" />
+   734→                        ) : (
+   735→                          <Camera className="size-4" />
+   736→                        )}
+   737→                        {avatarPhoto ? "تغییر تصویر" : "انتخاب تصویر از دستگاه"}
+   738→                      </Button>
+   739→                      {avatarPhoto && (
+   740→                        <Button
+   741→                          type="button"
+   742→                          variant="ghost"
+   743→                          size="icon"
+   744→                          className="text-destructive hover:text-destructive"
+   745→                          onClick={() => setAvatarPhoto("")}
+   746→                          aria-label="حذف تصویر"
+   747→                        >
+   748→                          <Trash2 className="size-4" />
+   749→                        </Button>
+   750→                      )}
+   751→                    </div>
+   752→                    <p className="text-[11px] text-muted-foreground leading-5">
+   753→                      تصویر به‌صورت خودکار مربعی (۲۵۶×۲۵۶) برش و فشرده می‌شود و فقط در حساب شما ذخیره
+   754→                      می‌گردد.
+   755→                    </p>
+   756→                  </div>
+   757→                )}
+   758→
+   759→                <Button
+   760→                  onClick={saveAvatar}
+   761→                  disabled={savingAvatar || (avatarMode === "photo" && !avatarPhoto)}
+   762→                  className="gap-1.5 w-full sm:w-auto"
+   763→                >
+   764→                  {savingAvatar && <Loader2 className="size-4 animate-spin" />}
+   765→                  ذخیره آواتار
+   766→                </Button>
+   767→              </div>
+   768→            </section>
+   769→
+   770→            <Separator />
+   771→
+   772→            {/* ---- بخش مشخصات ---- */}
+   773→            <section className="space-y-4">
+   774→              <div className="flex items-center gap-2 text-sm font-bold text-primary">
+   775→                <UserRound className="size-4" />
+   776→                مشخصات
+   777→              </div>
+   778→
+   779→              {/* نام کاربری — فقط‌خواندنی */}
+   780→              <div className="space-y-2">
+   781→                <Label>نام کاربری</Label>
+   782→                <div className="flex items-center justify-between gap-2 rounded-xl border bg-muted/40 px-3 h-11">
+   783→                  <span className="num text-sm font-semibold truncate" dir="ltr">
+   784→                    {user.username}
+   785→                  </span>
+   786→                  <span className="flex items-center gap-1 text-[11px] text-muted-foreground whitespace-nowrap shrink-0">
+   787→                    <Lock className="size-3" />
+   788→                    نام کاربری قابل تغییر نیست
+   789→                  </span>
+   790→                </div>
+   791→              </div>
+   792→
+   793→              <div className="space-y-2">
+   794→                <Label htmlFor="profile-fullname">نام کامل</Label>
+   795→                <Input
+   796→                  id="profile-fullname"
+   797→                  placeholder="نام و نام خانوادگی"
+   798→                  value={fullName}
+   799→                  onChange={(e) => setFullName(e.target.value)}
+   800→                  className="h-11"
+   801→                />
+   802→                {profileErrors.fullName && (
+   803→                  <p className="text-xs text-destructive">{profileErrors.fullName}</p>
+   804→                )}
+   805→              </div>
+   806→
+   807→              <div className="space-y-2">
+   808→                <Label htmlFor="profile-phone">
+   809→                  شماره تماس <span className="text-muted-foreground font-normal">(اختیاری)</span>
+   810→                </Label>
+   811→                <Input
+   812→                  id="profile-phone"
+   813→                  placeholder="۰۹۱۲۳۴۵۶۷۸۹"
+   814→                  inputMode="numeric"
+   815→                  value={phone}
+   816→                  onChange={(e) => setPhone(e.target.value)}
+   817→                  className="h-11"
+   818→                />
+   819→                {profileErrors.phone && (
+   820→                  <p className="text-xs text-destructive">{profileErrors.phone}</p>
+   821→                )}
+   822→                {initialPhone === null && (
+   823→                  <p className="text-[11px] text-muted-foreground flex items-center gap-1">
+   824→                    <Loader2 className="size-3 animate-spin" />
+   825→                    در حال دریافت شماره تماس فعلی…
+   826→                  </p>
+   827→                )}
+   828→              </div>
+   829→
+   830→              <Button onClick={saveProfile} disabled={savingProfile} className="gap-1.5 w-full sm:w-auto">
+   831→                {savingProfile && <Loader2 className="size-4 animate-spin" />}
+   832→                ذخیره مشخصات
+   833→              </Button>
+   834→            </section>
+   835→
+   836→            <Separator />
+   837→
+   838→            {/* ---- بخش تغییر گذرواژه ---- */}
+   839→            <section className="space-y-4">
+   840→              <div className="flex items-center gap-2 text-sm font-bold text-primary">
+   841→                <KeyRound className="size-4" />
+   842→                تغییر گذرواژه
+   843→              </div>
+   844→
+   845→              <div className="space-y-2">
+   846→                <Label htmlFor="pass-current">گذرواژه فعلی</Label>
+   847→                <div className="relative">
+   848→                  <Input
+   849→                    id="pass-current"
+   850→                    type={showCurrent ? "text" : "password"}
+   851→                    placeholder="گذرواژه فعلی خود را وارد کنید"
+   852→                    value={currentPassword}
+   853→                    onChange={(e) => setCurrentPassword(e.target.value)}
+   854→                    className="h-11 pe-11 ltr-value"
+   855→                    autoComplete="current-password"
+   856→                  />
+   857→                  <button
+   858→                    type="button"
+   859→                    onClick={() => setShowCurrent((s) => !s)}
+   860→                    className="absolute end-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+   861→                    aria-label={showCurrent ? "پنهان‌کردن گذرواژه" : "نمایش گذرواژه"}
+   862→                  >
+   863→                    {showCurrent ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+   864→                  </button>
+   865→                </div>
+   866→                {passErrors.current && (
+   867→                  <p className="text-xs text-destructive">{passErrors.current}</p>
+   868→                )}
+   869→              </div>
+   870→
+   871→              <div className="space-y-2">
+   872→                <Label htmlFor="pass-new">گذرواژه جدید</Label>
+   873→                <div className="relative">
+   874→                  <Input
+   875→                    id="pass-new"
+   876→                    type={showNew ? "text" : "password"}
+   877→                    placeholder="حداقل ۶ نویسه"
+   878→                    value={newPassword}
+   879→                    onChange={(e) => setNewPassword(e.target.value)}
+   880→                    className="h-11 pe-11 ltr-value"
+   881→                    autoComplete="new-password"
+   882→                  />
+   883→                  <button
+   884→                    type="button"
+   885→                    onClick={() => setShowNew((s) => !s)}
+   886→                    className="absolute end-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+   887→                    aria-label={showNew ? "پنهان‌کردن گذرواژه" : "نمایش گذرواژه"}
+   888→                  >
+   889→                    {showNew ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+   890→                  </button>
+   891→                </div>
+   892→                {passErrors.next && <p className="text-xs text-destructive">{passErrors.next}</p>}
+   893→              </div>
+   894→
+   895→              <div className="space-y-2">
+   896→                <Label htmlFor="pass-repeat">تکرار گذرواژه جدید</Label>
+   897→                <div className="relative">
+   898→                  <Input
+   899→                    id="pass-repeat"
+   900→                    type={showRepeat ? "text" : "password"}
+   901→                    placeholder="تکرار گذرواژه جدید"
+   902→                    value={repeatPassword}
+   903→                    onChange={(e) => setRepeatPassword(e.target.value)}
+   904→                    onKeyDown={(e) => e.key === "Enter" && changePassword()}
+   905→                    className="h-11 pe-11 ltr-value"
+   906→                    autoComplete="new-password"
+   907→                  />
+   908→                  <button
+   909→                    type="button"
+   910→                    onClick={() => setShowRepeat((s) => !s)}
+   911→                    className="absolute end-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+   912→                    aria-label={showRepeat ? "پنهان‌کردن گذرواژه" : "نمایش گذرواژه"}
+   913→                  >
+   914→                    {showRepeat ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+   915→                  </button>
+   916→                </div>
+   917→                {passErrors.repeat && (
+   918→                  <p className="text-xs text-destructive">{passErrors.repeat}</p>
+   919→                )}
+   920→              </div>
+   921→
+   922→              <Button
+   923→                onClick={changePassword}
+   924→                disabled={changingPassword}
+   925→                variant="outline"
+   926→                className="gap-1.5 w-full sm:w-auto"
+   927→              >
+   928→                {changingPassword && <Loader2 className="size-4 animate-spin" />}
+   929→                تغییر گذرواژه
+   930→              </Button>
+   931→            </section>
+   932→
+   933→            <Separator />
+   934→
+   935→            {/* ---- اطلاعات حساب ---- */}
+   936→            <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+   937→              <span className="flex items-center gap-1.5">
+   938→                <ShieldCheck className="size-3.5 text-primary/70" />
+   939→                سطح دسترسی:
+   940→              </span>
+   941→              <RoleBadge role={user.role} />
+   942→            </div>
+   943→          </div>
+   944→
+   945→          <DialogFooter className="gap-2">
+   946→            <Button variant="outline" onClick={() => setDialogOpen(false)}>
+   947→              بستن
+   948→            </Button>
+   949→          </DialogFooter>
+   950→        </DialogContent>
+   951→      </Dialog>
+   952→    </>
+   953→  );
+   954→}
+   955→

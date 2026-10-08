@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="g1" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#a3d977"/>
+      <stop offset="1" stop-color="#5c9142"/>
+    </linearGradient>
+    <linearGradient id="g2" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f0d060"/>
+      <stop offset="1" stop-color="#c9a227"/>
+    </linearGradient>
+  </defs>
+  <!-- شمسه هشت‌پر -->
+  <path d="M32 2l6.5 13L51 11l-4 12.5L59 30l-12 6.5L51 49l-12.5-4L32 58l-6.5-13L13 49l4-12.5L5 30l12-6.5L13 11l12.5 4z" fill="url(#g1)" opacity="0.9"/>
+  <circle cx="32" cy="30" r="15" fill="#141f12"/>
+  <!-- شاخه زیتون -->
+  <path d="M20 40c6-14 16-22 26-24" stroke="url(#g2)" stroke-width="2.6" fill="none" stroke-linecap="round"/>
+  <path d="M26 32c-6-1-9-5-9-9 5 0 9 3 10 8zM33 26c-1-6 2-10 6-12 1 5-2 9-6 12zM40 22c-2-5 0-10 3-13 2 5 0 10-3 13z" fill="url(#g2)"/>
+  <ellipse cx="24" cy="38" rx="3.6" ry="5" fill="url(#g2)" transform="rotate(-20 24 38)"/>
+  <ellipse cx="31" cy="32" rx="3.6" ry="5" fill="url(#g2)" transform="rotate(-30 31 32)"/>
+  <circle cx="32" cy="50" r="4" fill="url(#g2)"/>
+</svg>

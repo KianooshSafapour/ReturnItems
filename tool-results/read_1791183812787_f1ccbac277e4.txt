@@ -1,0 +1,920 @@
+     1→"use client";
+     2→
+     3→// مدیریت کاربران و نقش‌ها — فهرست، افزودن، ویرایش، تغییر نقش، فعال/غیرفعال‌سازی و بازنشانی گذرواژه
+     4→import { useCallback, useEffect, useState } from "react";
+     5→import { Button } from "@/components/ui/button";
+     6→import { Input } from "@/components/ui/input";
+     7→import { Label } from "@/components/ui/label";
+     8→import { Badge } from "@/components/ui/badge";
+     9→import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+    10→import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+    11→import { Skeleton } from "@/components/ui/skeleton";
+    12→import { Switch } from "@/components/ui/switch";
+    13→import {
+    14→  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
+    15→  DropdownMenuSeparator, DropdownMenuTrigger,
+    16→} from "@/components/ui/dropdown-menu";
+    17→import { TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
+    18→import { toast } from "sonner";
+    19→import { motion } from "framer-motion";
+    20→import {
+    21→  UserRound, UserPlus, KeyRound, UserCheck, UserX, MoreHorizontal, Loader2,
+    22→  RefreshCw, Eye, EyeOff, ShieldCheck, Users, Phone, Pencil, BadgeCheck,
+    23→} from "lucide-react";
+    24→import { toFaDigits, toEnDigits } from "@/lib/money";
+    25→import { formatJalaliDateTime } from "@/lib/jalali";
+    26→import { digitsOnly } from "@/lib/validators";
+    27→import { ROLE_LABELS, isManagerRole, type Role, type SessionUser, type UserRow } from "./types";
+    28→import { AvatarBadge } from "./avatar-badge";
+    29→
+    30→interface FormErrors {
+    31→  fullName?: string;
+    32→  username?: string;
+    33→  phone?: string;
+    34→  password?: string;
+    35→}
+    36→
+    37→/** نشان نقش کاربر — مدیر ارشد / مدیر کل / مدیر فروشگاه / صندوقدار */
+    38→function RoleBadge({ role }: { role: Role }) {
+    39→  if (role === "admin")
+    40→    return (
+    41→      <Badge className="gap-1 border border-primary/30 bg-primary/10 text-primary">
+    42→        <ShieldCheck className="size-3" />
+    43→        {ROLE_LABELS.admin}
+    44→      </Badge>
+    45→    );
+    46→  if (role === "gm")
+    47→    return (
+    48→      <Badge className="gap-1 border border-chart-5/50 bg-chart-5/15 text-chart-3">
+    49→        <BadgeCheck className="size-3" />
+    50→        {ROLE_LABELS.gm}
+    51→      </Badge>
+    52→    );
+    53→  if (role === "owner")
+    54→    return (
+    55→      <Badge className="gap-1 border border-chart-2/30 bg-chart-2/15 text-chart-2">
+    56→        <ShieldCheck className="size-3" />
+    57→        {ROLE_LABELS.owner}
+    58→      </Badge>
+    59→    );
+    60→  return <Badge variant="secondary">{ROLE_LABELS.cashier}</Badge>;
+    61→}
+    62→
+    63→/** راهنمای کوتاه هر نقش برای پنجره‌ها */
+    64→const ROLE_HINTS: Record<Role, string> = {
+    65→  cashier: "ثبت مرجوعی جدید و مشاهده تاریخچه خود — بدون دسترسی مدیریتی",
+    66→  gm: "مدیر کل فروشگاه — تأیید مرجوعی‌های بدون پرداخت (تبادلی)، داشبورد، آرشیو و بانک کالا",
+    67→  owner: "عملیات مدیریتی: داشبورد، انتقال وجه به مشتری، آرشیو، بانک کالا و کاربران",
+    68→  admin: "دسترسی کامل به همه بخش‌های سامانه (نقش توسعه‌دهنده)",
+    69→};
+    70→
+    71→/** نمای مدیریت کاربران — فقط برای مدیر رندر می‌شود */
+    72→export function UsersView({ user, onChanged }: { user: SessionUser; onChanged?: () => void }) {
+    73→  const [users, setUsers] = useState<UserRow[]>([]);
+    74→  const [loading, setLoading] = useState(true);
+    75→  const [addOpen, setAddOpen] = useState(false);
+    76→  const [resetTarget, setResetTarget] = useState<UserRow | null>(null);
+    77→  const [editTarget, setEditTarget] = useState<UserRow | null>(null);
+    78→  const [togglingId, setTogglingId] = useState<string | null>(null);
+    79→
+    80→  const load = useCallback(async () => {
+    81→    setLoading(true);
+    82→    try {
+    83→      const res = await fetch("/api/users");
+    84→      const data = await res.json();
+    85→      if (res.ok) {
+    86→        setUsers(data.users ?? []);
+    87→      } else {
+    88→        toast.error(data.error || "خطا در دریافت فهرست کاربران");
+    89→      }
+    90→    } catch {
+    91→      toast.error("خطا در دریافت فهرست کاربران");
+    92→    } finally {
+    93→      setLoading(false);
+    94→    }
+    95→  }, []);
+    96→
+    97→  useEffect(() => {
+    98→    load();
+    99→  }, [load]);
+   100→
+   101→  const toggleActive = async (row: UserRow, next: boolean) => {
+   102→    // حساب‌های مدیریتی (مدیر ارشد / مدیر فروشگاه) از این مسیر غیرفعال نمی‌شوند
+   103→    if (isManagerRole(row.role)) return;
+   104→    setTogglingId(row.id);
+   105→    try {
+   106→      const res = await fetch(`/api/users/${row.id}`, {
+   107→        method: "PATCH",
+   108→        headers: { "Content-Type": "application/json" },
+   109→        body: JSON.stringify({ isActive: next }),
+   110→      });
+   111→      const data = await res.json();
+   112→      if (res.ok) {
+   113→        toast.success(
+   114→          next ? `حساب «${row.fullName}» فعال شد` : `حساب «${row.fullName}» غیرفعال شد`
+   115→        );
+   116→        load();
+   117→        onChanged?.();
+   118→      } else {
+   119→        toast.error(data.error || "خطا در تغییر وضعیت حساب");
+   120→      }
+   121→    } catch {
+   122→      toast.error("خطا در تغییر وضعیت حساب");
+   123→    } finally {
+   124→      setTogglingId(null);
+   125→    }
+   126→  };
+   127→
+   128→  return (
+   129→    <div className="space-y-4">
+   130→      {/* سربرگ */}
+   131→      <div className="flex items-center justify-between gap-3 flex-wrap">
+   132→        <div className="flex items-center gap-2">
+   133→          <Users className="size-5 text-primary" />
+   134→          <h3 className="font-extrabold text-lg">کاربران و سطح دسترسی</h3>
+   135→          {users.length > 0 && (
+   136→            <Badge variant="outline" className="num">
+   137→              {toFaDigits(users.length)} حساب
+   138→            </Badge>
+   139→          )}
+   140→        </div>
+   141→        <div className="flex items-center gap-2">
+   142→          <Button variant="outline" size="sm" className="h-9 gap-1.5" onClick={load} disabled={loading}>
+   143→            {loading ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+   144→            به‌روزرسانی
+   145→          </Button>
+   146→          <Button size="sm" className="h-9 gap-1.5" onClick={() => setAddOpen(true)}>
+   147→            <UserPlus className="size-4" />
+   148→            افزودن کاربر
+   149→          </Button>
+   150→        </div>
+   151→      </div>
+   152→
+   153→      {/* جدول کاربران */}
+   154→      <div className="rounded-2xl border bg-card overflow-hidden">
+   155→        <div className="overflow-x-auto">
+   156→          <div className="max-h-[520px] overflow-y-auto">
+   157→            <table className="w-full text-sm min-w-[900px]">
+   158→              <TableHeader className="sticky top-0 z-10 bg-muted/95 backdrop-blur border-b">
+   159→                <TableRow className="text-muted-foreground text-xs hover:bg-transparent">
+   160→                  <TableHead className="text-start font-semibold px-4 py-3">نام کامل</TableHead>
+   161→                  <TableHead className="text-start font-semibold px-4 py-3">نام کاربری</TableHead>
+   162→                  <TableHead className="text-start font-semibold px-4 py-3">نقش</TableHead>
+   163→                  <TableHead className="text-start font-semibold px-4 py-3">شماره تماس</TableHead>
+   164→                  <TableHead className="text-start font-semibold px-4 py-3">مرجوعی‌ها</TableHead>
+   165→                  <TableHead className="text-start font-semibold px-4 py-3">پرداخت‌ها</TableHead>
+   166→                  <TableHead className="text-start font-semibold px-4 py-3">وضعیت</TableHead>
+   167→                  <TableHead className="text-start font-semibold px-4 py-3">تاریخ ایجاد</TableHead>
+   168→                  <TableHead className="text-start font-semibold px-4 py-3">عملیات</TableHead>
+   169→                </TableRow>
+   170→              </TableHeader>
+   171→              <TableBody>
+   172→                {loading ? (
+   173→                  Array.from({ length: 4 }).map((_, i) => (
+   174→                    <TableRow key={i}>
+   175→                      <TableCell colSpan={9} className="px-4 py-3">
+   176→                        <Skeleton className="h-7 w-full" />
+   177→                      </TableCell>
+   178→                    </TableRow>
+   179→                  ))
+   180→                ) : users.length === 0 ? (
+   181→                  <TableRow className="hover:bg-transparent">
+   182→                    <TableCell colSpan={9} className="py-14">
+   183→                      <div className="text-center text-muted-foreground">
+   184→                        <UserRound className="size-12 mx-auto mb-3 opacity-40" />
+   185→                        <p className="font-semibold text-sm">کاربری یافت نشد</p>
+   186→                      </div>
+   187→                    </TableCell>
+   188→                  </TableRow>
+   189→                ) : (
+   190→                  users.map((row, i) => (
+   191→                    <motion.tr
+   192→                      key={row.id}
+   193→                      initial={{ opacity: 0 }}
+   194→                      animate={{ opacity: 1 }}
+   195→                      transition={{ delay: Math.min(i * 0.03, 0.3) }}
+   196→                      className={`border-b last:border-0 transition-colors hover:bg-accent/40 ${
+   197→                        row.isActive ? "" : "opacity-60"
+   198→                      }`}
+   199→                    >
+   200→                      <TableCell className="px-4 py-3">
+   201→                        <div className="flex items-center gap-2.5">
+   202→                          <AvatarBadge fullName={row.fullName} avatar={row.avatar} size="md" />
+   203→                          <div className="min-w-0">
+   204→                            <p className="font-semibold whitespace-nowrap">{row.fullName}</p>
+   205→                            {row.id === user.id && (
+   206→                              <Badge variant="outline" className="text-[10px] mt-0.5">
+   207→                                شما
+   208→                              </Badge>
+   209→                            )}
+   210→                          </div>
+   211→                        </div>
+   212→                      </TableCell>
+   213→                      <TableCell className="px-4 py-3">
+   214→                        <span className="num text-xs text-muted-foreground" dir="ltr">
+   215→                          {row.username}
+   216→                        </span>
+   217→                      </TableCell>
+   218→                      <TableCell className="px-4 py-3">
+   219→                        <RoleBadge role={row.role} />
+   220→                      </TableCell>
+   221→                      <TableCell className="px-4 py-3">
+   222→                        {row.phone ? (
+   223→                          <span className="num text-xs" dir="ltr">
+   224→                            {toFaDigits(toEnDigits(row.phone))}
+   225→                          </span>
+   226→                        ) : (
+   227→                          <span className="text-muted-foreground text-xs flex items-center gap-1">
+   228→                            <Phone className="size-3" />
+   229→                            ثبت نشده
+   230→                          </span>
+   231→                        )}
+   232→                      </TableCell>
+   233→                      <TableCell className="px-4 py-3 num">{toFaDigits(row.returnCount)}</TableCell>
+   234→                      <TableCell className="px-4 py-3 num">{toFaDigits(row.paymentCount)}</TableCell>
+   235→                      <TableCell className="px-4 py-3">
+   236→                        <div className="flex items-center gap-2">
+   237→                          <Switch
+   238→                            checked={row.isActive}
+   239→                            disabled={isManagerRole(row.role) || togglingId === row.id}
+   240→                            onCheckedChange={(v) => toggleActive(row, v)}
+   241→                            aria-label={`وضعیت حساب ${row.fullName}`}
+   242→                          />
+   243→                          <span
+   244→                            className={`text-xs font-medium whitespace-nowrap ${
+   245→                              row.isActive ? "text-primary" : "text-muted-foreground"
+   246→                            }`}
+   247→                          >
+   248→                            {row.isActive ? "فعال" : "غیرفعال"}
+   249→                          </span>
+   250→                        </div>
+   251→                      </TableCell>
+   252→                      <TableCell className="px-4 py-3 num text-xs text-muted-foreground whitespace-nowrap">
+   253→                        {formatJalaliDateTime(new Date(row.createdAt))}
+   254→                      </TableCell>
+   255→                      <TableCell className="px-4 py-3">
+   256→                        <div className="flex items-center gap-2">
+   257→                          {isManagerRole(row.role) && (
+   258→                            <Badge variant="outline" className="text-muted-foreground gap-1">
+   259→                              <ShieldCheck className="size-3" />
+   260→                              حساب مدیریتی
+   261→                            </Badge>
+   262→                          )}
+   263→                          <DropdownMenu>
+   264→                            <DropdownMenuTrigger asChild>
+   265→                              <Button variant="ghost" size="icon" className="size-8" aria-label="عملیات کاربر">
+   266→                                <MoreHorizontal className="size-4" />
+   267→                              </Button>
+   268→                            </DropdownMenuTrigger>
+   269→                            <DropdownMenuContent align="start" className="min-w-44">
+   270→                              <DropdownMenuLabel className="text-xs text-muted-foreground">
+   271→                                {row.fullName}
+   272→                              </DropdownMenuLabel>
+   273→                              <DropdownMenuSeparator />
+   274→                              <DropdownMenuItem onClick={() => setEditTarget(row)} className="gap-2 cursor-pointer">
+   275→                                <Pencil className="size-4" />
+   276→                                ویرایش اطلاعات
+   277→                              </DropdownMenuItem>
+   278→                              <DropdownMenuItem onClick={() => setResetTarget(row)} className="gap-2 cursor-pointer">
+   279→                                <KeyRound className="size-4" />
+   280→                                بازنشانی گذرواژه
+   281→                              </DropdownMenuItem>
+   282→                              {row.role === "cashier" && (
+   283→                                <DropdownMenuItem
+   284→                                  onClick={() => toggleActive(row, !row.isActive)}
+   285→                                  className="gap-2 cursor-pointer"
+   286→                                  disabled={togglingId === row.id}
+   287→                                >
+   288→                                  {row.isActive ? (
+   289→                                    <>
+   290→                                      <UserX className="size-4" />
+   291→                                      غیرفعال‌سازی حساب
+   292→                                    </>
+   293→                                  ) : (
+   294→                                    <>
+   295→                                      <UserCheck className="size-4" />
+   296→                                      فعال‌سازی حساب
+   297→                                    </>
+   298→                                  )}
+   299→                                </DropdownMenuItem>
+   300→                              )}
+   301→                            </DropdownMenuContent>
+   302→                          </DropdownMenu>
+   303→                        </div>
+   304→                      </TableCell>
+   305→                    </motion.tr>
+   306→                  ))
+   307→                )}
+   308→              </TableBody>
+   309→            </table>
+   310→          </div>
+   311→        </div>
+   312→      </div>
+   313→
+   314→      {/* پنجره افزودن کاربر */}
+   315→      <AddUserDialog
+   316→        open={addOpen}
+   317→        onOpenChange={setAddOpen}
+   318→        onCreated={() => {
+   319→          load();
+   320→          onChanged?.();
+   321→        }}
+   322→      />
+   323→
+   324→      {/* پنجره بازنشانی گذرواژه */}
+   325→      <ResetPasswordDialog
+   326→        target={resetTarget}
+   327→        onOpenChange={(o) => {
+   328→          if (!o) setResetTarget(null);
+   329→        }}
+   330→        onDone={onChanged}
+   331→      />
+   332→
+   333→      {/* پنجره ویرایش کاربر */}
+   334→      <EditUserDialog
+   335→        target={editTarget}
+   336→        user={user}
+   337→        onOpenChange={(o) => {
+   338→          if (!o) setEditTarget(null);
+   339→        }}
+   340→        onSaved={() => {
+   341→          load();
+   342→          onChanged?.();
+   343→        }}
+   344→      />
+   345→    </div>
+   346→  );
+   347→}
+   348→
+   349→// ---------------- پنجره افزودن کاربر ----------------
+   350→
+   351→function AddUserDialog({
+   352→  open,
+   353→  onOpenChange,
+   354→  onCreated,
+   355→}: {
+   356→  open: boolean;
+   357→  onOpenChange: (o: boolean) => void;
+   358→  onCreated: () => void;
+   359→}) {
+   360→  const [fullName, setFullName] = useState("");
+   361→  const [username, setUsername] = useState("");
+   362→  const [phone, setPhone] = useState("");
+   363→  const [password, setPassword] = useState("");
+   364→  const [role, setRole] = useState<Role>("cashier");
+   365→  const [showPass, setShowPass] = useState(false);
+   366→  const [errors, setErrors] = useState<FormErrors>({});
+   367→  const [submitting, setSubmitting] = useState(false);
+   368→
+   369→  useEffect(() => {
+   370→    if (open) {
+   371→      setFullName("");
+   372→      setUsername("");
+   373→      setPhone("");
+   374→      setPassword("");
+   375→      setRole("cashier");
+   376→      setShowPass(false);
+   377→      setErrors({});
+   378→    }
+   379→  }, [open]);
+   380→
+   381→  const validate = (): boolean => {
+   382→    const e: FormErrors = {};
+   383→    if (fullName.trim().length < 3) e.fullName = "نام کامل حداقل ۳ نویسه باشد";
+   384→    if (!/^[a-z0-9_.-]{3,30}$/.test(username.trim().toLowerCase()))
+   385→      e.username = "نام کاربری باید ۳ تا ۳۰ نویسه لاتین کوچک، عدد، نقطه، خط تیره یا زیرخط باشد";
+   386→    const ph = digitsOnly(toEnDigits(phone));
+   387→    if (ph && !/^09\d{9}$/.test(ph)) e.phone = "شماره موبایل باید ۱۱ رقم و با ۰۹ شروع شود";
+   388→    if (password.length < 6) e.password = "گذرواژه حداقل ۶ نویسه باشد";
+   389→    setErrors(e);
+   390→    return Object.keys(e).length === 0;
+   391→  };
+   392→
+   393→  const submit = async () => {
+   394→    if (!validate() || submitting) return;
+   395→    setSubmitting(true);
+   396→    try {
+   397→      const res = await fetch("/api/users", {
+   398→        method: "POST",
+   399→        headers: { "Content-Type": "application/json" },
+   400→        body: JSON.stringify({
+   401→          fullName: fullName.trim(),
+   402→          username: username.trim().toLowerCase(),
+   403→          phone: digitsOnly(toEnDigits(phone)).trim(),
+   404→          password,
+   405→          role,
+   406→        }),
+   407→      });
+   408→      const data = await res.json();
+   409→      if (res.ok) {
+   410→        toast.success(`حساب ${ROLE_LABELS[role]} «${fullName.trim()}» ایجاد شد`);
+   411→        onOpenChange(false);
+   412→        onCreated();
+   413→      } else {
+   414→        toast.error(data.error || "خطا در ایجاد حساب کاربری");
+   415→      }
+   416→    } catch {
+   417→      toast.error("خطا در ایجاد حساب کاربری");
+   418→    } finally {
+   419→      setSubmitting(false);
+   420→    }
+   421→  };
+   422→
+   423→  return (
+   424→    <Dialog open={open} onOpenChange={(o) => !submitting && onOpenChange(o)}>
+   425→      <DialogContent dir="rtl" className="w-[calc(100vw-1.5rem)] sm:max-w-lg">
+   426→        <DialogHeader>
+   427→          <DialogTitle className="flex items-center gap-2">
+   428→            <UserPlus className="size-5 text-primary" />
+   429→            افزودن کاربر جدید
+   430→          </DialogTitle>
+   431→          <DialogDescription>
+   432→            حساب تازه با نقش انتخابی ساخته می‌شود؛ نقش هر کاربر بعدها نیز قابل تغییر است.
+   433→          </DialogDescription>
+   434→        </DialogHeader>
+   435→
+   436→        <div className="space-y-4">
+   437→          <div className="space-y-2">
+   438→            <Label>نقش کاربر</Label>
+   439→            <Select value={role} onValueChange={(v) => setRole(v as Role)}>
+   440→              <SelectTrigger className="h-11 w-full" id="new-user-role" aria-label="نقش کاربر">
+   441→                <SelectValue />
+   442→              </SelectTrigger>
+   443→              <SelectContent>
+   444→                <SelectItem value="cashier">صندوقدار</SelectItem>
+   445→                <SelectItem value="gm">مدیر کل (تأیید مرجوعی بدون پرداخت)</SelectItem>
+   446→                <SelectItem value="owner">مدیر فروشگاه</SelectItem>
+   447→                <SelectItem value="admin">مدیر ارشد سامانه</SelectItem>
+   448→              </SelectContent>
+   449→            </Select>
+   450→            <p className="text-[11px] leading-5 text-muted-foreground">{ROLE_HINTS[role]}</p>
+   451→          </div>
+   452→
+   453→          <div className="space-y-2">
+   454→            <Label htmlFor="cashier-fullname">نام کامل</Label>
+   455→            <Input
+   456→              id="cashier-fullname"
+   457→              placeholder="مثلاً: فاطمه رضایی"
+   458→              value={fullName}
+   459→              onChange={(e) => setFullName(e.target.value)}
+   460→              className="h-11"
+   461→            />
+   462→            {errors.fullName && <p className="text-xs text-destructive">{errors.fullName}</p>}
+   463→          </div>
+   464→
+   465→          <div className="space-y-2">
+   466→            <Label htmlFor="cashier-username">نام کاربری</Label>
+   467→            <Input
+   468→              id="cashier-username"
+   469→              placeholder="مثلاً: fateme.rezaei"
+   470→              value={username}
+   471→              onChange={(e) => setUsername(e.target.value)}
+   472→              className="h-11"
+   473→              dir="ltr"
+   474→              autoComplete="off"
+   475→            />
+   476→            {errors.username ? (
+   477→              <p className="text-xs text-destructive">{errors.username}</p>
+   478→            ) : (
+   479→              <p className="text-[11px] text-muted-foreground">
+   480→                فقط حروف لاتین کوچک، عدد و نویسه‌های . _ -
+   481→              </p>
+   482→            )}
+   483→          </div>
+   484→
+   485→          <div className="space-y-2">
+   486→            <Label htmlFor="cashier-phone">
+   487→              شماره تماس <span className="text-muted-foreground font-normal">(اختیاری)</span>
+   488→            </Label>
+   489→            <Input
+   490→              id="cashier-phone"
+   491→              placeholder="۰۹۱۲۳۴۵۶۷۸۹"
+   492→              inputMode="numeric"
+   493→              value={phone}
+   494→              onChange={(e) => setPhone(e.target.value)}
+   495→              className="h-11"
+   496→              dir="ltr"
+   497→            />
+   498→            {errors.phone && <p className="text-xs text-destructive">{errors.phone}</p>}
+   499→          </div>
+   500→
+   501→          <div className="space-y-2">
+   502→            <Label htmlFor="cashier-password">گذرواژه</Label>
+   503→            <div className="relative">
+   504→              <Input
+   505→                id="cashier-password"
+   506→                type={showPass ? "text" : "password"}
+   507→                placeholder="حداقل ۶ نویسه"
+   508→                value={password}
+   509→                onChange={(e) => setPassword(e.target.value)}
+   510→                className="h-11 pe-11"
+   511→                dir="ltr"
+   512→                autoComplete="new-password"
+   513→              />
+   514→              <button
+   515→                type="button"
+   516→                onClick={() => setShowPass((s) => !s)}
+   517→                className="absolute end-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+   518→                aria-label={showPass ? "پنهان‌کردن گذرواژه" : "نمایش گذرواژه"}
+   519→              >
+   520→                {showPass ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+   521→              </button>
+   522→            </div>
+   523→            {errors.password && <p className="text-xs text-destructive">{errors.password}</p>}
+   524→          </div>
+   525→        </div>
+   526→
+   527→        <DialogFooter className="gap-2">
+   528→          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>
+   529→            انصراف
+   530→          </Button>
+   531→          <Button onClick={submit} disabled={submitting} className="gap-1.5">
+   532→            {submitting && <Loader2 className="size-4 animate-spin" />}
+   533→            ایجاد حساب
+   534→          </Button>
+   535→        </DialogFooter>
+   536→      </DialogContent>
+   537→    </Dialog>
+   538→  );
+   539→}
+   540→
+   541→// ---------------- پنجره بازنشانی گذرواژه ----------------
+   542→
+   543→function ResetPasswordDialog({
+   544→  target,
+   545→  onOpenChange,
+   546→  onDone,
+   547→}: {
+   548→  target: UserRow | null;
+   549→  onOpenChange: (o: boolean) => void;
+   550→  onDone?: () => void;
+   551→}) {
+   552→  const [password, setPassword] = useState("");
+   553→  const [showPass, setShowPass] = useState(false);
+   554→  const [submitting, setSubmitting] = useState(false);
+   555→
+   556→  useEffect(() => {
+   557→    setPassword("");
+   558→    setShowPass(false);
+   559→  }, [target]);
+   560→
+   561→  const submit = async () => {
+   562→    if (!target || submitting) return;
+   563→    if (password.length < 6) {
+   564→      toast.error("گذرواژه حداقل ۶ نویسه باشد");
+   565→      return;
+   566→    }
+   567→    setSubmitting(true);
+   568→    try {
+   569→      const res = await fetch(`/api/users/${target.id}`, {
+   570→        method: "PATCH",
+   571→        headers: { "Content-Type": "application/json" },
+   572→        body: JSON.stringify({ password }),
+   573→      });
+   574→      const data = await res.json();
+   575→      if (res.ok) {
+   576→        toast.success(`گذرواژه «${target.fullName}» بازنشانی شد`);
+   577→        onOpenChange(false);
+   578→        onDone?.();
+   579→      } else {
+   580→        toast.error(data.error || "خطا در بازنشانی گذرواژه");
+   581→      }
+   582→    } catch {
+   583→      toast.error("خطا در بازنشانی گذرواژه");
+   584→    } finally {
+   585→      setSubmitting(false);
+   586→    }
+   587→  };
+   588→
+   589→  return (
+   590→    <Dialog open={!!target} onOpenChange={(o) => !submitting && onOpenChange(o)}>
+   591→      <DialogContent dir="rtl" className="w-[calc(100vw-1.5rem)] sm:max-w-lg">
+   592→        <DialogHeader>
+   593→          <DialogTitle className="flex items-center gap-2">
+   594→            <KeyRound className="size-5 text-primary" />
+   595→            بازنشانی گذرواژه
+   596→          </DialogTitle>
+   597→          <DialogDescription>
+   598→            گذرواژه جدید برای حساب «{target?.fullName}» (
+   599→            <span className="num" dir="ltr">
+   600→              {target?.username}
+   601→            </span>
+   602→            ) تعیین کنید.
+   603→          </DialogDescription>
+   604→        </DialogHeader>
+   605→
+   606→        <div className="space-y-2">
+   607→          <Label htmlFor="reset-password">گذرواژه جدید</Label>
+   608→          <div className="relative">
+   609→            <Input
+   610→              id="reset-password"
+   611→              type={showPass ? "text" : "password"}
+   612→              placeholder="حداقل ۶ نویسه"
+   613→              value={password}
+   614→              onChange={(e) => setPassword(e.target.value)}
+   615→              onKeyDown={(e) => e.key === "Enter" && submit()}
+   616→              className="h-11 pe-11"
+   617→              dir="ltr"
+   618→              autoComplete="new-password"
+   619→            />
+   620→            <button
+   621→              type="button"
+   622→              onClick={() => setShowPass((s) => !s)}
+   623→              className="absolute end-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+   624→              aria-label={showPass ? "پنهان‌کردن گذرواژه" : "نمایش گذرواژه"}
+   625→            >
+   626→              {showPass ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+   627→            </button>
+   628→          </div>
+   629→          <p className="text-[11px] text-muted-foreground leading-5">
+   630→            پس از بازنشانی، صندوقدار باید در ورود بعدی از گذرواژه جدید استفاده کند.
+   631→          </p>
+   632→        </div>
+   633→
+   634→        <DialogFooter className="gap-2">
+   635→          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>
+   636→            انصراف
+   637→          </Button>
+   638→          <Button onClick={submit} disabled={submitting} className="gap-1.5">
+   639→            {submitting && <Loader2 className="size-4 animate-spin" />}
+   640→            بازنشانی گذرواژه
+   641→          </Button>
+   642→        </DialogFooter>
+   643→      </DialogContent>
+   644→    </Dialog>
+   645→  );
+   646→}
+   647→
+   648→// ---------------- پنجره ویرایش کاربر ----------------
+   649→
+   650→function EditUserDialog({
+   651→  target,
+   652→  user,
+   653→  onOpenChange,
+   654→  onSaved,
+   655→}: {
+   656→  target: UserRow | null;
+   657→  user: SessionUser;
+   658→  onOpenChange: (o: boolean) => void;
+   659→  onSaved: () => void;
+   660→}) {
+   661→  const [fullName, setFullName] = useState("");
+   662→  const [username, setUsername] = useState("");
+   663→  const [phone, setPhone] = useState("");
+   664→  const [password, setPassword] = useState("");
+   665→  const [role, setRole] = useState<Role>("cashier");
+   666→  const [showPass, setShowPass] = useState(false);
+   667→  const [isActive, setIsActive] = useState(true);
+   668→  const [errors, setErrors] = useState<FormErrors>({});
+   669→  const [submitting, setSubmitting] = useState(false);
+   670→
+   671→  useEffect(() => {
+   672→    if (target) {
+   673→      setFullName(target.fullName);
+   674→      setUsername(target.username);
+   675→      setPhone(target.phone ?? "");
+   676→      setPassword("");
+   677→      setRole(target.role);
+   678→      setShowPass(false);
+   679→      setIsActive(target.isActive);
+   680→      setErrors({});
+   681→    }
+   682→  }, [target]);
+   683→
+   684→  const validate = (): boolean => {
+   685→    const e: FormErrors = {};
+   686→    if (fullName.trim().length < 3) e.fullName = "نام کامل حداقل ۳ نویسه باشد";
+   687→    if (!/^[a-z0-9_.-]{3,30}$/.test(username.trim().toLowerCase()))
+   688→      e.username = "نام کاربری باید ۳ تا ۳۰ نویسه لاتین کوچک، عدد، نقطه، خط تیره یا زیرخط باشد";
+   689→    const ph = digitsOnly(toEnDigits(phone));
+   690→    if (ph && !/^09\d{9}$/.test(ph)) e.phone = "شماره موبایل باید ۱۱ رقم و با ۰۹ شروع شود";
+   691→    if (password && password.length < 6) e.password = "گذرواژه جدید حداقل ۶ نویسه باشد";
+   692→    setErrors(e);
+   693→    return Object.keys(e).length === 0;
+   694→  };
+   695→
+   696→  const submit = async () => {
+   697→    if (!target || submitting) return;
+   698→    if (!validate()) return;
+   699→
+   700→    // تنها فیلدهای تغییر‌یافته ارسال می‌شود
+   701→    const fullNameT = fullName.trim();
+   702→    const usernameT = username.trim().toLowerCase();
+   703→    const phoneT = digitsOnly(toEnDigits(phone));
+   704→    const payload: Record<string, string | boolean> = {};
+   705→    if (fullNameT !== target.fullName) payload.fullName = fullNameT;
+   706→    if (usernameT !== target.username) payload.username = usernameT;
+   707→    if (phoneT !== (target.phone ?? "")) payload.phone = phoneT; // رشته خالی = پاک‌کردن
+   708→    if (password) payload.password = password;
+   709→    if (role !== target.role) payload.role = role;
+   710→    if (!isManagerRole(target.role) && target.id !== user.id && isActive !== target.isActive)
+   711→      payload.isActive = isActive;
+   712→
+   713→    if (Object.keys(payload).length === 0) {
+   714→      toast.info("تغییری برای ذخیره وجود ندارد");
+   715→      return;
+   716→    }
+   717→
+   718→    const roleChanged = payload.role !== undefined;
+   719→
+   720→    setSubmitting(true);
+   721→    try {
+   722→      const res = await fetch(`/api/users/${target.id}`, {
+   723→        method: "PATCH",
+   724→        headers: { "Content-Type": "application/json" },
+   725→        body: JSON.stringify(payload),
+   726→      });
+   727→      const data = await res.json();
+   728→      if (res.ok) {
+   729→        toast.success(
+   730→          roleChanged
+   731→            ? `کاربر به‌روزرسانی شد — نقش جدید: ${ROLE_LABELS[role]}`
+   732→            : "کاربر به‌روزرسانی شد"
+   733→        );
+   734→        onOpenChange(false);
+   735→        onSaved();
+   736→      } else {
+   737→        toast.error(data.error || "خطا در به‌روزرسانی کاربر");
+   738→      }
+   739→    } catch {
+   740→      toast.error("خطا در به‌روزرسانی کاربر");
+   741→    } finally {
+   742→      setSubmitting(false);
+   743→    }
+   744→  };
+   745→
+   746→  const isManagerRow = !!target && isManagerRole(target.role);
+   747→  const isOwnRow = !!target && target.id === user.id;
+   748→
+   749→  return (
+   750→    <Dialog open={!!target} onOpenChange={(o) => !submitting && onOpenChange(o)}>
+   751→      <DialogContent
+   752→        dir="rtl"
+   753→        className="w-[calc(100vw-1.5rem)] sm:max-w-lg max-h-[calc(100dvh-2rem)] overflow-y-auto"
+   754→      >
+   755→        <DialogHeader>
+   756→          <DialogTitle className="flex items-center gap-2">
+   757→            <Pencil className="size-5 text-primary" />
+   758→            ویرایش کاربر
+   759→          </DialogTitle>
+   760→          <DialogDescription>
+   761→            ویرایش مشخصات و نقش حساب «{target?.fullName}» — تنها فیلدهای تغییر‌یافته ذخیره می‌شوند.
+   762→          </DialogDescription>
+   763→        </DialogHeader>
+   764→
+   765→        <div className="space-y-4">
+   766→          <div className="space-y-2">
+   767→            <Label>نقش کاربر</Label>
+   768→            <Select
+   769→              value={role}
+   770→              onValueChange={(v) => setRole(v as Role)}
+   771→              disabled={isOwnRow}
+   772→            >
+   773→              <SelectTrigger className="h-11 w-full" id="edit-user-role" aria-label="نقش کاربر">
+   774→                <SelectValue />
+   775→              </SelectTrigger>
+   776→              <SelectContent>
+   777→                <SelectItem value="cashier">صندوقدار</SelectItem>
+   778→                <SelectItem value="gm">مدیر کل (تأیید مرجوعی بدون پرداخت)</SelectItem>
+   779→                <SelectItem value="owner">مدیر فروشگاه</SelectItem>
+   780→                <SelectItem value="admin">مدیر ارشد سامانه</SelectItem>
+   781→              </SelectContent>
+   782→            </Select>
+   783→            {isOwnRow ? (
+   784→              <p className="text-[11px] leading-5 text-muted-foreground flex items-center gap-1">
+   785→                <ShieldCheck className="size-3 shrink-0" />
+   786→                نقش حساب خودتان قابل تغییر نیست.
+   787→              </p>
+   788→            ) : (
+   789→              <p className="text-[11px] leading-5 text-muted-foreground">{ROLE_HINTS[role]}</p>
+   790→            )}
+   791→            {isManagerRow && !isOwnRow && (
+   792→              <p className="text-[11px] leading-5 text-muted-foreground flex items-center gap-1">
+   793→                <ShieldCheck className="size-3 shrink-0" />
+   794→                تغییر نقش حساب‌های مدیریتی با محدودیت امنیتی انجام می‌شود.
+   795→              </p>
+   796→            )}
+   797→          </div>
+   798→
+   799→          <div className="space-y-2">
+   800→            <Label htmlFor="edit-fullname">نام کامل</Label>
+   801→            <Input
+   802→              id="edit-fullname"
+   803→              placeholder="مثلاً: زهرا محمدی"
+   804→              value={fullName}
+   805→              onChange={(e) => setFullName(e.target.value)}
+   806→              className="h-11"
+   807→            />
+   808→            {errors.fullName && <p className="text-xs text-destructive">{errors.fullName}</p>}
+   809→          </div>
+   810→
+   811→          <div className="space-y-2">
+   812→            <Label htmlFor="edit-username">نام کاربری</Label>
+   813→            <Input
+   814→              id="edit-username"
+   815→              placeholder="مثلاً: zahra.mohammadi"
+   816→              value={username}
+   817→              onChange={(e) => setUsername(e.target.value)}
+   818→              className="h-11"
+   819→              dir="ltr"
+   820→              autoComplete="off"
+   821→            />
+   822→            {errors.username ? (
+   823→              <p className="text-xs text-destructive">{errors.username}</p>
+   824→            ) : (
+   825→              <p className="text-[11px] text-muted-foreground">
+   826→                فقط حروف لاتین کوچک، عدد و نویسه‌های . _ -
+   827→              </p>
+   828→            )}
+   829→          </div>
+   830→
+   831→          <div className="space-y-2">
+   832→            <Label htmlFor="edit-phone">
+   833→              شماره تماس <span className="text-muted-foreground font-normal">(اختیاری)</span>
+   834→            </Label>
+   835→            <Input
+   836→              id="edit-phone"
+   837→              placeholder="۰۹۱۲۳۴۵۶۷۸۹"
+   838→              inputMode="numeric"
+   839→              value={phone}
+   840→              onChange={(e) => setPhone(e.target.value)}
+   841→              className="h-11"
+   842→              dir="ltr"
+   843→            />
+   844→            {errors.phone && <p className="text-xs text-destructive">{errors.phone}</p>}
+   845→          </div>
+   846→
+   847→          <div className="space-y-2">
+   848→            <Label htmlFor="edit-password">
+   849→              گذرواژه جدید <span className="text-muted-foreground font-normal">(اختیاری)</span>
+   850→            </Label>
+   851→            <div className="relative">
+   852→              <Input
+   853→                id="edit-password"
+   854→                type={showPass ? "text" : "password"}
+   855→                placeholder="برای حفظ گذرواژه فعلی خالی بگذارید"
+   856→                value={password}
+   857→                onChange={(e) => setPassword(e.target.value)}
+   858→                className="h-11 pe-11"
+   859→                dir="ltr"
+   860→                autoComplete="new-password"
+   861→              />
+   862→              <button
+   863→                type="button"
+   864→                onClick={() => setShowPass((s) => !s)}
+   865→                className="absolute end-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+   866→                aria-label={showPass ? "پنهان‌کردن گذرواژه" : "نمایش گذرواژه"}
+   867→              >
+   868→                {showPass ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+   869→              </button>
+   870→            </div>
+   871→            {errors.password && <p className="text-xs text-destructive">{errors.password}</p>}
+   872→          </div>
+   873→
+   874→          <div className="flex items-center justify-between gap-3 rounded-xl border bg-muted/30 px-4 py-3">
+   875→            <div className="flex items-center gap-2">
+   876→              <Switch
+   877→                id="edit-active"
+   878→                checked={isActive}
+   879→                disabled={isManagerRow || isOwnRow}
+   880→                onCheckedChange={setIsActive}
+   881→                aria-label="وضعیت حساب"
+   882→              />
+   883→              <Label htmlFor="edit-active" className="cursor-pointer text-sm">
+   884→                وضعیت حساب
+   885→              </Label>
+   886→            </div>
+   887→            <span
+   888→              className={`text-xs font-medium whitespace-nowrap ${
+   889→                isActive ? "text-primary" : "text-muted-foreground"
+   890→              }`}
+   891→            >
+   892→              {isActive ? "فعال" : "غیرفعال"}
+   893→            </span>
+   894→          </div>
+   895→          {isManagerRow && (
+   896→            <p className="text-[11px] text-muted-foreground -mt-1">
+   897→              وضعیت حساب‌های مدیریتی (مدیر ارشد / مدیر فروشگاه) از این‌جا تغییر نمی‌کند.
+   898→            </p>
+   899→          )}
+   900→          {isOwnRow && !isManagerRow && (
+   901→            <p className="text-[11px] text-muted-foreground -mt-1">
+   902→              وضعیت حساب خودتان قابل تغییر نیست.
+   903→            </p>
+   904→          )}
+   905→        </div>
+   906→
+   907→        <DialogFooter className="gap-2">
+   908→          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>
+   909→            انصراف
+   910→          </Button>
+   911→          <Button onClick={submit} disabled={submitting} className="gap-1.5">
+   912→            {submitting && <Loader2 className="size-4 animate-spin" />}
+   913→            ذخیره تغییرات
+   914→          </Button>
+   915→        </DialogFooter>
+   916→      </DialogContent>
+   917→    </Dialog>
+   918→  );
+   919→}
+   920→

@@ -1,0 +1,187 @@
+   375→---
+   376→Task ID: 14-b
+   377→Agent: full-stack-developer subagent
+   378→Task: Low-stock inventory alerts card «هشدار موجودی بانک کالا» on the owner dashboard (Holoo bank visibility for Mr. Norouzi)
+   379→
+   380→Work Log:
+   381→- SCOPE (3 files only): src/app/api/stats/route.ts, src/components/hz/types.ts (StatsDTO), src/components/hz/owner-dashboard.tsx (new card + its grid)
+   382→- stats/route.ts: added 4 queries to the existing Promise.all (all current queries untouched): lowStockProducts = product.findMany({isActive, stock lte 5}, orderBy [stock asc, name asc], take 8, select id/name/stock/unit/code), lowStockCount = count(stock lte 5), outOfStockCount = count(stock 0), bankUpdated = product.findFirst(orderBy updatedAt desc, select updatedAt) — destructured and exposed as jsonOk({..., lowStock: {products, total, outOfStock, bankUpdatedAt}}). Prisma note confirmed: `stock: { lte: 5 }` excludes nulls automatically
+   383→- types.ts: StatsDTO += lowStock { products: Array<{id,name,stock,unit,code|null}>; total; outOfStock; bankUpdatedAt: string|null }
+   384→- owner-dashboard.tsx: imports += PackageCheck, TriangleAlert (both verified in lucide-react dist); last dashboard grid → «grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3» with the new card as 3rd child (عملکرد صندوقدارها + مرجوعی‌های اخیر + هشدار موجودی). Card: CardTitle TriangleAlert(chart-2 tint) + «هشدار موجودی بانک کالا» + secondary num Badge «{total} کالا» (outline «بدون هشدار» when total=0); CardDescription «کالاهای دارای ۵ عدد یا کمتر موجودی — بر اساس آخرین بروزرسانی بانک کالا (هلو)»; CardContent states: (a) total=0 → healthy empty state PistachioMotif 56/opacity-60 + PackageCheck primary-tone «همه کالاها موجودی کافی دارند», (b) chips row flex-wrap (destructive chip «{outOfStock} کالای تمام‌شده» only when >0 + amber chip «{total} کالا با موجودی کم») + ul max-h-64 overflow-y-auto with motion.li rows (x:14 like cashier rows, delay i*0.05, hover:border-chart-2/40 hover:bg-accent/40) each = name (truncate, min-w-0, flex-1 col) + optional outline num code Badge «کد: …» + stock badge («ناموجود» destructive / «{stock} {unit}» amber), (c) footer note num text-[10px] «آخرین به‌روزرسانی بانک کالا: {formatJalaliDateTime}» / «بروزرسانی بانک کالا: نامشخص». Renders only inside the existing `stats ?` branch — loading skeleton & error states untouched
+   385→- BUG FOUND & FIXED during mobile QA (root-caused, not guessed): long Holoo product names inside truncate (white-space:nowrap) rows («آبنبات شیری با طعم زنجبیل و نارگیل GINGER @») give the li a min-content contribution of 416.141px; on mobile the last grid had NO grid-template-columns (implicit `auto` column) so the track sized to 416px and ALL THREE cards stretched to 416px and got clipped (body scrollWidth stayed 390 = check passed while content was cut). Diagnosed via getComputedStyle(grid).gridTemplateColumns + per-li display:none binary search (li #2 alone → track 366). FIX: added `grid-cols-1` to the grid → explicit minmax(0,1fr) track on mobile (visual single-column unchanged); desktop md:2/xl:3 columns unaffected. Deviation from the literal spec class string documented here
+   386→- ENVIRONMENT NOTE: the system-managed dev server died mid-task (EADDRINUSE crash cycle in dev.log); restarted it manually with `nohup bun run dev >> dev.log 2>&1 &` to complete QA — server stable since
+   387→- VERIFICATION: bunx tsc --noEmit → 0 errors in all 3 changed files (only the 35 known pre-existing errors in seed/examples/skills/products-import remain); bunx eslint on the 3 files → 0 problems; curl (owner session norouzi, cookie jar /tmp/nz-b.jar): /api/stats lowStock = {total: 2788, outOfStock: 227, bankUpdatedAt: "2026-09-30T16:31:41.343Z", products: 8 all stock=0 sorted stock asc then name asc (آب اکسیژن دار 200 میل اکساب → آلوچه ترش ممتاز)} — numbers match DB reality (2,788 ≤5 / 227 =0); rest of response unchanged (pendingCount 1, 4 cashiers, series 14, topProducts 6, recentReturns 5)
+   388→- BROWSER E2E (agent-browser isolated session qa-b, 1440×900): login norouzi/Zeytoon@1404 → dashboard renders new card with badge «۲۷۸۸ کالا», chips «۲۲۷ کالای تمام‌شده» (destructive) + «۲۷۸۸ کالا با موجودی کم» (amber), 8 product rows (name + کد badge + «ناموجود» badge), footer «آخرین به‌روزرسانی بانک کالا: ۱۴۰۵/۰۷/۰۸ – ۱۶:۳۱»; list scrolls (scrollTop 200 of 304, client 256, scrollHeight 560); last grid = 3×357px columns same top (side-by-side); 0 console/page errors (agent-browser errors --json → []); regression OK — stat cards, both charts, عملکرد صندوقدارها (4 rows + medals + bars), مرجوعی‌های اخیر (5 rows) all render
+   389→- MOBILE E2E (390×844): no horizontal overflow (body.scrollWidth 390 === innerWidth 390), implicit-track bug fixed (track 366px, all 3 cards 366px, stacked vertically tops 2020/2500/2928), product list scrolls (client 256 / scrollHeight 560)
+   390→- Screenshots: agent-ctx/14-b-screenshots/hz-14b-lowstock-card.png (desktop) + hz-14b-mobile.png
+   391→
+   392→Stage Summary:
+   393→- Owner dashboard now shows low-stock inventory alerts from the Holoo product bank: «هشدار موجودی بانک کالا» card with out-of-stock/low-stock summary chips, top-8 most-critical products (stock asc) with code + stock badges, Jalali bank-last-updated timestamp, and a healthy empty state — Mr. Norouzi gains reorder visibility over 2,788 running-out items (227 fully out)
+   394→- All checks green: tsc (0 in changed files), eslint (0), curl API numbers exact (2788/227/8-sorted/non-null timestamp, rest of envelope unchanged), desktop + mobile E2E, 0 console errors
+   395→- Key CSS-grid gotcha documented: implicit `auto` grid columns size to item MIN-CONTENT — a truncate (nowrap) row with long Persian product names blows the track past the container while body scrollWidth stays clean; always pair mobile-stacking grids with `grid-cols-1` (minmax(0,1fr)) when cards contain truncate rows. Diagnosis recipe: getComputedStyle(grid).gridTemplateColumns + hide-one-child binary search
+   396→- Deviation from spec: grid class is `grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3` (spec said without grid-cols-1) — required to satisfy the spec's own mobile no-overflow requirement; motion.li uses x:14 entrance exactly like the cashier rows as specified
+   397→
+   398→---
+   399→Task ID: 14 (main) / 14-a / 14-b
+   400→Agent: main (Z.ai Code) + 2× full-stack-developer subagents
+   401→Task: QA round → v0.4.0 «پسته»: رسید حرارتی ۸۰ میلی‌متری + پیش‌نویس خودکار فرم + هشدار موجودی + رفع دو باگ چاپی بحرانی + صیقل ظاهری
+   402→
+   403→Work Log:
+   404→- QA ASSESSMENT (agent-browser 1440×900, fresh session): historical page errors in reused browser profile identified and cleared (5 stale HMR-era errors from past rounds — fresh session = 0); owner norouzi login → all 8 tabs render with 0 console/page errors; cashier zahra → 2-tab role isolation + barcode scan 6260492610086 → نستله added; mobile 390×844 both roles no overflow → VERDICT: STABLE, proceed to features (per worklog suggested-next)
+   405→- VLM design review of dashboard (7.5/10): actionable items filtered → card hover states, chart card feedback, secondary polish
+   406→- FEATURE SELECTION from worklog suggested-next: (A) thermal 80mm receipt variant, (B) return-form draft autosave, (C) low-stock alerts
+   407→- SUBAGENT 14-a (parallel, session qa-a): return-form.tsx ONLY — draft autosave: module helpers (ReturnDraft v1, 14-day expiry, SSR-guarded localStorage read/write/remove via hz:return-draft:{username}), one-time draftRef lazy read + all field useState initializers restore from draft (items remapped with fresh keys, purchaseAt NaN-guarded), NEW transferManual state gating the auto-sync effect (manual transfer amount no longer resets when items are added — UX fix), debounced 700ms autosave (skip during success, remove when empty), draft removed on submit-success + resetForm, restore toast with «دورریختن» action, autosave indicator in خلاصه aside (Save icon + Jalali timestamp + Trash2 discard). Verified by subagent: tsc/eslint clean, E2E save→reload→restore→discard cycle, regression Ctrl+Enter/همگام/camera
+   408→- SUBAGENT 14-b (parallel, session qa-b): stats/route.ts + types.ts + owner-dashboard.tsx — low-stock alerts: 4 new queries in Promise.all (top-8 products stock≤5 sorted asc, count≤5, count=0, latest bank updatedAt) → StatsDTO.lowStock; «هشدار موجودی بانک کالا» card in 3-column grid (grid-cols-1 md:2 xl:3 — grid-cols-1 NEEDED: implicit auto columns blow up from truncate min-content), amber TriangleAlert title + count badge, destructive/amber summary chips (۲۲۷ تمام‌شده / ۲۷۸۸ کم‌موجود), max-h-64 scrollable motion.li rows (name + کد badge + ناموجود/stock badge), Jalali bank-updated footer, PackageCheck healthy empty state. Verified: curl exact numbers (2788/227), E2E desktop+mobile, 0 errors
+   409→- 14 MAIN — THERMAL 80mm RECEIPT (receipt-dialog.tsx + globals.css): format state ("a4"|"thermal") persisted to localStorage hz:receipt-format; toolbar segmented toggle (FileText/برگه A4 vs Receipt/حرارتی ۸۰mm, active=bg-chart-2, h-9, aria-pressed); dynamic <style> tag renders @page {size: 80mm 327mm; margin: 2mm} when thermal (overrides globals' A4 — "80mm auto" is INVALID CSS, Chromium drops it and falls back to A4: two lengths required, 327mm ≈ longest receipt, short receipts just have trailing blank); ThermalReceipt component: 302px shell + thermal-paper (receipt-print-area class → full print pipeline reuse) + serrated conic-gradient edges (thermal-edge-t/b, no-print) + compact layout (emblem header, status chip, CODE128 tracking barcode h26, TRow label/value info rows, per-item blocks with EAN-13/CODE128 h16 barcodes + qty/price/line-total, settlement rows, border-double total box with toman words, payment info, dotted signature line, footer, Scissors cut mark); toolbar text switches per format; print CSS: .thermal-shell/.thermal-paper width 100% + shadow none, edges display none
+   410→- 14 MAIN — TWO CRITICAL PRE-EXISTING PRINT BUGS FOUND & FIXED (affected BOTH formats since v0.2.1; discovered via pixel-band analysis + print-emulated geometry debugging + git-stash A/B baseline test):
+   411→  1. BUG «نیمهٔ بالایی رسید چاپ نمی‌شد»: Tailwind 4 centers shadcn Dialog via the CSS `translate` PROPERTY (translate: -50% -50%), NOT transform — the print rule `transform: none` did NOT reset it → dialog stayed shifted (-720,-465) off-canvas in print → only the receipt's bottom half intersected the page (A4 extraction was 753 bytes bottom-sections-only; thermal 643 bytes; items table + header + all item barcodes MISSING from every printed receipt)
+   412→  2. BUG «حاشیه‌های سیاه صفحهٔ چاپ»: dark-mode `color-scheme: dark` (next-themes) makes Chromium paint the print canvas black in the @page margin zones → 10mm black frame around A4 pages (rgb(18,18,18))
+   413→  FIXES (globals.css @media print): html,body { color-scheme: light !important } + standalone rule [data-slot="dialog-content"]:has(.receipt-print-area) { translate: none !important; rotate: none !important; scale: none !important }
+   414→  LIGHTNING CSS MINEFIELD (documented for future): (a) Lightning CSS FOLDS translate/rotate/scale INTO `transform` (identity functions translate3d(0,0,0)rotate3d(...)scale3d(...)) when they share a rule or adjacent same-selector rules with transform — semantically WRONG because the `translate` property survives as a separate cascade property → the reset MUST live in a rule with a DIFFERENT selector (data-slot+:has workaround) and WITHOUT transform in the same block; (b) after globals.css edits the Turbopack/PostCSS pipeline sometimes serves STALE css — if a CSS change "isn't applying", verify the SERVED css asset (fetch the href chunk and grep) before concluding the rule is dropped; a clean .next purge + restart is the decisive test; (c) dev-server restarts by subagents (EADDRINUSE crashes) required manual `pkill` + setsid nohup restarts — .next purge needed once
+   415→  TRUE-PRINT VERIFICATION (playwright page.pdf preferCSSPageSize, /home/z/.qa/print-test-thermal.mjs): thermal page EXACTLY 227.04×926.88pt = 80×327mm, 1 page, A4 595.92×842.88 1 page; A4 extraction 753→2452 bytes (3.3×) with header/customer/items/signatures/footer all present, thermal 643→1906 bytes (هایپر زیتون header + نستله item + all markers); pixel analysis: black frame GONE (0 full-dark rows/cols), content bands healthy; VLM structural check confirms items table + per-item barcodes + all sections; original task-11 script re-run — same fixed output (bug was pre-existing, not a regression of this round)
+   416→- 14 MAIN — STYLING POLISH: TAB_TOUCH += transition-[color,background-color,box-shadow] duration-200 hover:text-foreground data-[state=inactive]:hover:bg-accent/70 (inactive tab hover feedback app-wide); owner-dashboard chart cards += group transition-all hover:-translate-y-0.5 hover:border-primary/30 hover:shadow-lg; receipt toolbar print button += active:scale-95; VERSION BUMP v0.3.0 «نارون» → v0.4.0 «پسته» (page.tsx comment + APP_VERSION/APP_CODENAME — header badge + footer + login all read constants)
+   417→- FINAL VERIFICATION: `bun run lint` 0 problems; `bunx tsc --noEmit` 0 new errors (35 known pre-existing in seed/examples/skills/import only); browser E2E (fresh session): owner dashboard renders low-stock card (۲۷۸۸ کالا / ۲۲۷ تمام‌شده) + 0 errors; receipt dialog: A4 default → thermal toggle (302px paper, 6 barcodes, @page tag) → close/reopen → thermal REMEMBERED (localStorage) → A4 toggle back clean; live draft E2E post-restarts: fill name+phone → localStorage hz:return-draft:zahra saved → reload → fields restored → discard button → form+storage clean; mobile 390×844: owner + cashier no overflow, 0 errors; dev.log clean (all 200s); VLM final review 8.5/10 (was 7.5 at round start), low-stock card «highly consistent» with design system
+   418→- Test artifacts: /home/z/.qa/print-test-thermal.mjs (reusable thermal+regression print test), /home/z/.qa/final-*.png screenshots
+   419→
+   420→Stage Summary:
+   421→- v0.4.0 «پسته» COMPLETE and browser+print-verified: (1) رسید حرارتی ۸۰ میلی‌متری — thermal receipt format for POS/thermal printers with format toggle (persisted), serrated paper preview, compact layout with real scannable barcodes, exact 80mm print output; (2) پیش‌نویس خودکار — cashier drafts survive refresh/crash via debounced localStorage autosave with restore-on-mount, restore toast, discard action, autosave indicator (plus transferManual UX fix); (3) هشدار موجودی — owner dashboard low-stock card over Holoo inventory (2788 low / 227 out); (4) two CRITICAL pre-existing print bugs fixed (top-half receipt truncation + black page margins) — every printed receipt was silently missing its header/items/barcodes since v0.2.1; (5) styling polish (tab/chart hover states) + version bump
+   422→- Print pipeline knowledge hardened: Tailwind 4 dialog centering uses the `translate` property; Lightning CSS folds individual transform properties into `transform` when co-located (must isolate resets in differently-selected rules); dark color-scheme blackens print margins; verify served CSS asset before trusting "dropped rule" conclusions; page.pdf preferCSSPageSize for true @page testing
+   423→- All checks green: lint 0, tsc 0 new, E2E desktop+mobile fresh sessions, true-print PDFs pixel+text verified, 0 console/page errors, dev.log clean
+   424→- Suggested next: DB restore endpoint from backup file, monthly PDF report, SMS notification hooks for Mr. Norouzi, receipt QR code (scan → track status), cashier shift report, product image support in Holoo import
+   425→
+   426→---
+   427→Task ID: 2-a
+   428→Agent: general-purpose (SMS research)
+   429→Task: Research REST APIs of Iranian SMS panels (for unified SMS-sending module in Node/TS)
+   430→
+   431→Work Log:
+   432→- Read worklog context: project needs SMS notification hooks for Mr. Norouzi (suggested-next in Task 13/14); this task = research-only, no code changes
+   433→- Web-searched each provider (Persian queries) + fetched official docs pages via z-ai page_reader / curl; extracted text from HTML/PDF/DOCX/RAR official documentation files
+   434→- GOLD SOURCES FOUND: (1) messagebird/sachet Go provider source (melipayamak impl), (2) official Melipayamak GitHub SDKs (melipayamak-node/php/python → rest.payamak-panel.com), (3) official Mojeshahr OpenAPI spec repo for Payamresan V3 (sms-webservice.com — includes error-codes.yaml, machine-readable), (4) Payamito's official REST PDF (payamito.com/files/webservice/send-webservice.zip), (5) BehinSMS official API docs RAR (behinsms.com/downloads/Behin-API-file.rar — DOCX files), (6) IPPanel Edge docs (ippanelcom.github.io/Edge-Document), (7) sms.ir single-page REST docs (sms.ir/rest-api)
+   435→- LIVE-PROBED endpoints from sandbox (invalid creds) to verify actual response envelopes: rest.payamak-panel.com SendSMS → {"Value":"0","RetStatus":35,"StrRetStatus":"InvalidData"} HTTP200; GetCredit → RetStatus:0 "UserNameAndPasswordFailed"; api.sms.ir/v1/send/bulk → HTTP401 {"status":10,...}; api.sms-webservice.com V3SandBox SendBulk → {"Success":true,"ErrorCode":null,"Error":null,"Result":[{"Id":...,"UserTraceId":...}]}; rest.payamakapi.ir/api/v1/SMS/Send (Webone) → {"Id":null,"Status":false,"Message":"InvalidUserNameOrPassword"} HTTP200
+   436→- KEY DISCOVERY: Iranian SMS market = 3 white-label API families: (A) payamak-panel infra shared by Melipayamak+Payamito+Farapayamak (rest.payamak-panel.com), (B) sms-webservice.com V3 shared by Payamresan+BehinSMS, (C) independents (IPPanel, SMS.ir, Webone/payamakapi.ir)
+   437→- KEY DISCOVERY: api.sms-webservice.com PRODUCTION is Iran-IP-only (foreign IP → 403 "IP address not allowed"); sandbox endpoint works globally → E2E SMS tests from this dev sandbox must use V3SandBox; production calls will work when deployed/ran from Iran
+   438→- Verified Payamito has NO branded API domain (rest.payamito.ir/.com/api.payamito.ir — DNS dead); their official PDF explicitly documents rest.payamak-panel.com
+   439→- behinpayam.com (بهین پیام) was 504 throughout research — unverified; the established "بهین پیامک" = behinsms.com (both legacy + V3 APIs confirmed from their own downloaded docs)
+   440→
+   441→Stage Summary:
+   442→- 7/7 providers verified from OFFICIAL sources (docs pages, official SDK code, official downloadable docs) + live endpoint probes. Full spec table below — this is the implementation contract for the unified SMS module:
+   443→
+   444→1) فراز اس‌ام‌اس (Faraz SMS / IPPanel) — CONFIDENCE: CONFIRMED (official docs)
+   445→   · Endpoint: POST https://edge.ippanel.com/v1/api/send
+   446→   · Auth: header `Authorization: <apikey>` (NO Bearer prefix; key from پنل → Developers → Access Keys)
+   447→   · Body (JSON): { "sending_type": "webservice", "from_number": "+983000505" (E.164!), "message": "متن", "params": { "recipients": ["+989120000000", ...] }, "send_time": "YYYY-MM-DD HH:MM:SS" (optional, UTC) }
+   448→   · Response 200: { "data": { "message_outbox_ids": [1123544244] }, "meta": { "status": true, "message": "انجام شد", "message_parameters": [], "message_code": "200-1" } }
+   449→   · SUCCESS: resp.meta.status === true (errors: 401 invalid token meta.status=false message_code "400-1"; 422 validation "400-2")
+   450→   · Docs: https://ippanelcom.github.io/Edge-Document/docs/send/webservice
+   451→
+   452→2) ملی پیامک (Melipayamak) — CONFIDENCE: CONFIRMED (official SDKs + sachet + live probe)
+   453→   · Endpoint: POST https://rest.payamak-panel.com/api/SendSMS/SendSMS
+   454→   · Auth: username + password (APIKey) IN BODY (no header)
+   455→   · Content-Type: application/x-www-form-urlencoded (official SDK) or application/json (both verified live)
+   456→   · Body fields: username, password, to (comma-separated, max 100), from (sender line "5000..."), text, isflash (optional bool; official SDKs use isFlash/isflash — both accepted)
+   457→   · Response (always HTTP 200, JSON): { "Value": "<recIds comma-sep>", "RetStatus": 1, "StrRetStatus": "Ok" }
+   458→   · SUCCESS: RetStatus === 1 (StrRetStatus === "Ok"); Value = recIds on success / error-code on failure (0=wrong user/pass, 2=no credit, 3=daily limit, 4=volume limit, 5=bad sender, 6=updating, 7=filtered word, 11=not sent, 18=invalid recipient); live probe bad creds: {"Value":"0","RetStatus":35,"StrRetStatus":"InvalidData"}
+   459→   · Delivery check: POST rest.payamak-panel.com/api/SendSMS/GetDeliveries2 {username,password,recID} → Value: 0=sent to operator, 1=delivered, 2=not delivered, 35=blacklist...
+   460→   · Docs: https://www.melipayamak.com/api/sendsms · SDKs: github.com/Melipayamak/melipayamak-{node,php,python} · error list: melipayamak.com/blog/posts/list-of-message-webservice-errors
+   461→
+   462→3) پیام رسان (Payamresan) — CONFIDENCE: CONFIRMED (official OpenAPI + live sandbox probe)
+   463→   · Base: https://api.sms-webservice.com/api/V3 (prod — IRAN IP ONLY) / api/V3SandBox (global)
+   464→   · Auth: ApiKey IN BODY (POST) — format "123456-XXXXXXXXXXXXXXX"
+   465→   · RECOMMENDED: POST /SendBulk (JSON): { "ApiKey": "...", "Text": "متن", "Sender": 30004040 (int64 line), "Recipients": [ { "Destination": 9121112222 (int64, NO leading zero!), "UserTraceId": 1001 (optional int64 trace id) } ] } — max 99
+   466→   · Simple: GET /Send?ApiKey=&Text=&Sender=&Recipients=9121112222,9121113333
+   467→   · Response (ALWAYS HTTP 200 — even bad key!): { "Success": true|false, "ErrorCode": int|null, "Error": string|null, "Result": [ { "Id": 322790795574620, "UserTraceId": 1001 } ]|null }
+   468→   · SUCCESS: resp.Success === true (ErrorCode is null on success, NOT 0); decide ONLY from Success, never from HTTP status
+   469→   · Recipient format: NO leading zero (9121112222 or 989121112222); not starting with 9/989 → ErrorCode 13
+   470→   · Key errors: 1=InvalidApiKey, 2=ApiNotActive, 4=temp-deactivated(retry backoff 30-120s), 13=bad number format, 15-18/20=rate limits, 100=unknown(retry)
+   471→   · AccountInfo POST {ApiKey} → Result:{Credit, AvailableSenders[]}; StatusById/StatusByUserTraceId for delivery
+   472→   · Docs: docs.payam-resan.com (504 from foreign IP) · OpenAPI spec: github.com/Mojeshahr/sms-webservice-spec · Node examples: github.com/Mojeshahr/nodejs-sms-webservice
+   473→
+   474→4) بهین پیامک (BehinSMS) — CONFIDENCE: CONFIRMED (official RAR docs + website)
+   475→   · CURRENT API = same sms-webservice.com V3 as Payamresan (their site sample: api.sms-webservice.com/api/V3/SendTokenSingle) → same driver as #3
+   476→   · LEGACY (still documented): GET https://panel.behinsms.com/smsws/HttpService.ashx?service=SendArray&username=...&password=...&to=...&message=...&from=...&chkMessageId=...
+   477→   · Legacy response: array of message IDs — each ID > 1000 = SENT; 50 < code < 1000 = error (51=wrong user/pass, 61=invalid sender, 63=IP not whitelisted, 201=bad format, 203=no credit...); SOAP: panel.behinsms.com/smsws/soap.asmx
+   478→   · Docs: https://behinsms.com/webservice/ + behinsms.com/downloads/Behin-API-file.rar · behinpayam.com (بهین پیام) unreachable — unverified
+   479→
+   480→5) اس‌ام‌اس آی‌آر (SMS.ir) — CONFIDENCE: CONFIRMED (official docs + live probe)
+   481→   · Endpoint: POST https://api.sms.ir/v1/send/bulk
+   482→   · Auth: header `X-API-KEY: <key>` (from پنل برنامه‌نویسان → کلیدهای API; key type " Sandbox" exists for testing)
+   483→   · Body (JSON): { "lineNumber": 30004505000017 (long, required), "messageText": "متن" (required), "mobiles": ["0912..."] (max 100, required), "sendDateTime": null|unixtime (optional) }
+   484→   · Response 200: { "status": 1, "message": "موفق", "data": { "packId": "guid", "messageIds": [86522023, 0|null...], "cost": 2.0 } } — messageIds: 0=blacklisted recipient, null=invalid number/oversized text
+   485→   · SUCCESS: HTTP 200 && status === 1; errors: HTTP 400/401/429/500 with status codes (0=system, 10=invalid key [verified live: 401+status:10], 11=key off, 12=IP-restricted, 13/14=account, 20=rate, 101=no credit, 103=bad mobiles, 104=>100, 115=blacklist)
+   486→   · Extras: /v1/send/verify (OTP: {mobile, templateId, parameters:[{name,value}]}), /v1/send/likeToLike, GET /v1/credit, GET /v1/line, DELETE /v1/send/scheduled/{packId}
+   487→   · Docs: https://sms.ir/rest-api
+   488→
+   489→6) پیامیتو (Payamito) — CONFIDENCE: CONFIRMED (official PDF, = payamak-panel family)
+   490→   · SAME as Melipayamak #2: POST https://rest.payamak-panel.com/api/SendSMS/SendSMS, username/password/to/from/text/isFlash, response {Value, RetStatus, StrRetStatus}, success RetStatus===1
+   491→   · No branded API domain exists (rest.payamito.ir DNS-dead); panel at payamito.com (NOT .ir)
+   492→   · Docs: https://payamito.com/webservice → send-webservice.zip (webservice-rest.pdf has full Value/RetStatus/StrRetStatus spec + GetDeliveries2 codes)
+   493→
+   494→7) وب‌وان (Webone SMS) — CONFIDENCE: request CONFIRMED (official docs page); response VERIFIED via live probe
+   495→   · Endpoint: POST https://rest.payamakapi.ir/api/v1/SMS/Send
+   496→   · Auth: username + password IN JSON BODY
+   497→   · Body (JSON): { "UserName": "...", "Password": "...", "From": "10002147", "To": "09123...", "Message": "..." }
+   498→   · Response (HTTP 200 always — live probe): { "Id": null|<messageId>, "Status": true|false, "Message": "<error string>" }
+   499→   · SUCCESS: resp.Status === true (Id = message id); live probe bad creds: {"Id":null,"Status":false,"Message":"InvalidUserNameOrPassword"}
+   500→   · SOAP variant documented on same page: SendSMS returnValue 0=success (Webone's own code table differs from Melipayamak's!), 1=bad creds, 7=filtered, 8=no credit, 16=invalid mobile
+   501→   · Docs: https://webone-sms.com/fa/صفحه/وب-سرویس-ارسال-پیامک (also webone-sms.ir)
+   502→
+   503→- IMPLEMENTATION GUIDANCE for the unified TS module: (1) build 5 drivers: ippanel / payamak-panel (melipayamak+payamito+farapayamak) / sms-webservice-v3 (payamresan+behinsms) / smsir / webone; (2) normalize response to {ok, messageId?, errorCode?, errorMessage?}; (3) per-driver phone normalization: ippanel→+98 E.164, V3→strip leading 0 (912...), others→09...; (4) NEVER trust HTTP status alone (all panels return 200 with body-level errors except sms.ir 401/429); (5) from-sandbox E2E tests: use V3SandBox + sms.ir sandbox keys + webone/melipayamak will fail-auth — assert error mapping; (6) timeouts ≥30s recommended (V3 official examples use 30s AbortSignal)
+   504→
+   505→---
+   506→Task ID: 3 (main implementation — all user requests)
+   507→Agent: main (Z.ai Code)
+   508→Task: Holoo XLS default format + SMS panel integration + DB reset (3 accounts) + avatar/profile + UI fixes (اکنون bug, dialog widths, demo login removal)
+   509→
+   510→Work Log:
+   511→- قراداد داده‌ها: Prisma schema + User.avatar + SmsTemplate + SmsLog models (relation به ReturnRequest با SetNull) → db:push موفق
+   512→- src/lib/sms.ts (خالص/ایمن برای کلاینت): ۵ درایور یکپارچه از تحقیق Task 2-a — ippanel(edge)/payamakPanel(melipayamak+payamito)/smsWebserviceV3(payamresan+behinsms)/smsir/webone + درایور سفارشی (method/URL/headers/body با {{phone}}/{{message}}/{{sender}})؛ نرمال‌سازی موبایل ایران؛ رندر قالب با {{مشتری}}/{{مبلغ_تومان}}/{{شماره_پیگیری}}/{{فروشگاه}}/{{بانک}}/{{تاریخ}}/{{ساعت}}؛ شمارش پارت SMS (۷۰/۶۷ UCS-2)
+   513→- APIهای جدید: /api/admin/sms-config (GET ماسک‌شده/PUT فقط مدیران) + /api/sms/templates (+[id] PATCH/DELETE) + /api/sms/test + /api/sms/logs
+   514→- payment route: پذیرش body.sms {enabled,templateId,text} → ارسال خودکار بعد از ثبت پرداخت + ثبت SmsLog (sent/failed) + بازگشت وضعیت در پاسخ
+   515→- holoo.ts: **بارکد = كد كالا همیشه** (منطق هلو — بدون استنباط)؛ قالب نمونه دقیقاً ۹ ستون رسمی هلو (سرستون‌ها عیناً از فایل واقعی با ك/ي عربی) با خروجی BIFF8 (.xls) — تطبیق بایت‌به‌بایت سرستون‌ها تأیید شد
+   516→- import route: حذف تکراری‌های داخل فایل (کد یکسان) + گزارش duplicates
+   517→- products POST/PATCH: کد/بارکد همیشه هم‌مقدار (فیلد واحد «کد کالا/بارکد» در UI)
+   518→- JalaliDateTimePicker: **رفع باگ «اکنون»** — قبلاً ساعت 12:00 پیش‌فرض state بود؛ حالا زمان واقعی سیستم + confirm بدون انتخاب = زمان فعلی
+   519→- عرض دیالوگ‌ها: ReturnDetailDialog و Receipt به sm:max-w-4xl/md:max-w-5xl + w-[calc(100vw-1.5rem)] + overflow-x-hidden؛ customer-history 3xl؛ users-view/admin-center/profile به lg/xl — تأیید: dialogWidth=1024 (قبلاً 768)، docScrollW=vw بدون سرریز افقی
+   520→- login-view: **حذف کامل بخش حساب‌های نمونه**
+   521→- آواتار: components/hz/avatar-badge.tsx (initials/emoji/photo + پالت ۸ رنگ + ۲۴ ایموجی) + profile-menu بازنویسی‌شده با بخش «آواتار من» + آپلود عکس با برش مربعی canvas ۲۵۶×۲۵۶ + PATCH /api/auth/profile با اعتبارسنجی + نمایش در هدر/منو/فهرست کاربران
+   522→- کاربران: GET شامل avatar؛ POST: ایجاد نقش admin فقط توسط admin
+   523→- seed.ts بازنویسی: حذف کامل داده‌های نمونه → ۳ حساب (kianoosh/@@HZ6677 مدیر ارشد، norouzi/123456 جواد نوروزی بهجت owner، mohammadi/123456 آزاده محمدی پور cashier) + ۷۰۷۹ کالا فقط از upload/inventory.xlsx (بارکد=کد) + ۴ قالب پیامک پیش‌فرض + managerName=جواد نوروزی بهجت
+   524→- mini-services/mock-sms-service (پورت 3040، bun --hot): شبیه‌ساز پنل IPPanel برای تست — لاگ کامل پیام‌ها
+   525→- رفع ۳ باگ در حین QA: SmsTemplatesCard دوباره‌سازی با promise-chain (قانون set-state-in-effect)، حذف setLoading یتیم، مرجع load حذف‌شده در SmsLogsCard → reload/refreshTick؛ منطق تشخیص موفقیت درایور سفارشی (سیگنال قطعی positive/native، وگرنه HTTP)
+   526→- TypeScript: رفع خطاهای تایپ (validateAvatar undefined، ExistingProduct typing، SmsConfig typing) — tsc --noEmit بدون خطا در src
+   527→- QA مرورگر (agent-browser): ورود norouzi → دیالوگ جزئیات عریض + بخش پیامک (سوییچ+قالب+متن قابل‌ویرایش) → انتخاب بانک ملی + قالب «مرجوعی کالا» → متن خودکار با داده واقعی مشتری → «اکنون» = ۱۷:۱۴ صحیح → ثبت پرداخت + ارسال پیامک موفق (SmsLog sent از پنل custom→mock)؛ مرکز پیامک (۳ کارت: اتصال/قالب‌ها/تاریخچه) بدون خطا؛ آواتار ذخیره 🌻 + به‌روزرسانی هدر؛ آپلود inventory.xlsx از UI مرورگر → POST /api/products/import 200 در ۴.۶ ثانیه؛ نمای صندوقدار سالم؛ پاک‌سازی داده‌های آزمایشی در پایان
+   528→
+   529→Stage Summary:
+   530→- **ورود XLS کاربر رفع شد**: آپلود از خود UI مرورگر با inventory.xlsx موفق (200 در 4.6s) — مشکل قبلی از وضعیت قدیمی دیتابیس بود
+   531→- **قالب پیش‌فرض = فرمت رسمی هلو ۹ ستونه** (رديف/كد كالا/نام كالا/مقدار/مقدار دوم/نام واحد/قيمت خريد/قيمت فروش/تعدا*في خريد)؛ بارکد = کد در کل سامانه
+   532→- **سامانه پیامک کامل**: ۷ پنل پشتیبانی‌شده + سفارشی؛ ارسال خودکار هنگام ثبت پرداخت با انتخاب نوع پیام و متن قابل‌ویرایش توسط آقای نوروزی؛ ۴ نوع پیش‌فرض + تعریف نوع جدید توسط مدیران؛ تاریخچه ارسال
+   533→- **۳ حساب نهایی**: kianoosh/@@HZ6677 · norouzi/123456 · mohammadi/123456 — فقط این‌ها؛ بقیه از پنل مدیریت ساخته می‌شوند
+   534→- تنظیم فعلی پنل پیامک = سفارشی → http://localhost:3040 (mock آزمایشی) — برای پنل واقعی: مرکز مدیریت ← پیامک ← پنل خود را انتخاب و کلیدها را وارد کنید
+   535→- lint پاک | tsc پاک | dev server سالم | خطای کنسول مرورگر: صفر
+   536→
+   537→---
+   538→Task ID: 4
+   539→Agent: main (Z.ai Code)
+   540→Task: RTL direction fix + clickable dashboard cards + multi-barcode (Holoo) + SMS tracking-code fix + transfer card validation + manager alert SMS + 2D avatar creator + full QA
+   541→
+   542→Work Log:
+   543→- **ریشه‌یابی RTL**: چرا داشبورد چپ‌به‌راست بود؟ → Radix `Tabs.Root` به‌صورت پیش‌فرض `dir="ltr"` رندر می‌کند و تمام محتوای زبانه‌ها آن را به ارث می‌برد (html rtl بود اما Tabs داخلش ltr!). دو اصلاح: (۱) نصب `@radix-ui/react-direction` و پیچیدن کل برنامه در `<DirectionProvider dir="rtl">` در page.tsx (همه اجزای رادیکس: Tabs/Select/Dropdown/Popover از کانتکست می‌خوانند) (۲) `dir="rtl"` صریح در `components/ui/tabs.tsx`. تأیید مرورگر: تب «داشبورد» x=1103 (راست) → تب آخر x=298 (چپ) ✓
+   544→- **کارت‌های داشبورد قابل کلیک**: statCards دارای nav/navLabel شدند (pending→زبانه در انتظار، بقیه→آرشیو) + role=button/tabIndex/aria/keyboard + نشان «دیدن آرشیو ‹» با هاور؛ کارت «عملکرد صندوقدارها»→دکمه مدیریت کاربران، «مرجوعی‌های اخیر»→مشاهده همه + هر ردیف اخیر→زبانه مرتبط، «هشدار موجودی»→بانک کالا. page.tsx:onNavigate={(t)=>setTab(t)} به OwnerDashboard پاس شد
+   545→- **بارکد چندگانه هلو**: مدل جدید `ProductBarcode` (productId/code, unique+index) + db push؛ GET /api/products?barcode= ابتدا بارکد اصلی، سپس alias (extraBarcodes همراه محصول برمی‌گردد)؛ جستجوی متنی و mode=list هم alias را جستجو می‌کنند؛ PATCH /api/products/[id] فیلد extraBarcodes (جایگزینی کامل با اعتبارسنجی یکتایی در برابر کد اصلی/alias کالای دیگر)؛ UI: بخش «بارکدهای دیگر این کالا (كد كالا‌های بعدی هلو)» در دیالوگ ویرایش کالا با چیپ + افزودن/حذف + توضیح چرا گزارش هلو فقط بارکد نخست را می‌آورد + بج «+N» با تولتیپ در جدول
+   546→- **رفع باگ کد رهگیری پیامک**: renderedTemplateBody اکنون trackingCode = referenceNumber (ورودی کد رهگیری فرم) || detail.code؛ افزودن smsTextDirty + افکت بازرندر خودکار متن با تغییر کد رهگیری/بانک (مگر ویرایش دستی مدیر)؛ برچسب فیلد به «کد رهگیری انتقال بانکی» + hint. تأیید E2E: پیامک مشتری «…با شماره پیگیری RF-987654321 پرداخت شد» (نه HZ-…) ✓
+   547→- **اعتبارسنجی کارت در فرم انتقال مدیر**: isValidCardNumber (لان) + detectBankName — بج بانک + راهنمای «✓ شماره کارت معتبر است / (N از ۱۶ رقم) معتبر نیست» + بلاک ارسال با کارت نامعتبر (همان تجربه فرم صندوقدار)
+   548→- **هشدار پیامکی مرجوعی به مدیران**: کلیدهای sms_alert_enabled/user_ids/template + SmsAlertConfig + DEFAULT_SMS_ALERT_TEMPLATE + متغیرهای جدید قالب ({{صندوقدار}}/{{تعداد}}/{{کالا}})؛ lib/sms-alerts.ts → notifyManagersOfReturn (fire-and-forget در POST /api/returns؛ هرگز ثبت مرجوعی را نمی‌شکند؛ فقط owner/admin فعال با موبایل معتبر) + SmsLog با requestId؛ sms-config GET/PUT فیلدهای alert* (اعتبارسنجی نقش/فعال بودن گیرندگان)؛ کارت جدید «هشدار پیامکی مرجوعی به مدیران» در مرکز پیامک: سوییچ روشن/خاموش + فهرست مدیران (چک‌باکس+آواتار+نقش+موبایل با هشدار نامعتبر) + ویرایشگر قالب با چیپ جای‌نگهدار + پیش‌نمایش زنده با داده نمونه + شمارش پارت. تأیید E2E: ثبت مرجوعی توسط صندوقدار → ۲ پیامک sent به هر دو مدیر (متن: مشتری/مبلغ/سند/صندوقدار/تعداد/کالا) ✓
+   549→- **سازنده آواتار دوبعدی (بیت‌موجی فلت SVG)**: components/hz/vector-avatar.tsx — ۱۱ دسته: پوست(۶)/مو(۱۱ مدل: کوتاه/چنج/فر/موج/اصلاح/گیره/دم‌اسبی/بلند/مقنعه/کلاه/بدون)/رنگ مو(۸)/ابرو(۴)/چشم(۵)/لب(۴)/عینک(۴)/ریش‌وسبیل(۴)/لباس(تی‌شرت/یقه‌دار/هودی)/رنگ لباس(۸)/پس‌زمینه(۸) — رندر SVG خالص ۲۰۰×۲۰۰ (سایه‌بان تیره، چین مقنعه، برجستگی چشم/لبخند) + دکمه تصادفی/بازنشانی؛ AvatarBadge حالت vector؛ دیالوگ «حساب من» → سازنده با پیش‌نمایش xxl + دسته‌چیپ + گزینه‌ها (مو با مینی‌پیش‌نمایش!) + ذخیره {type:"vector",config}؛ validateAvatar مسیر vector (HEX+طول). حالت ایموجی حذف شد (پارسی‌سازی قدیمی در badge می‌ماند)
+   550→- **QA مرورگر کامل**: dev server ری‌استارت شد (کلاینت پرایسما قدیمی در حافظه → خطای Unknown field extraBarcodes؛ پس از ری‌استارت درست شد — نکته مهم برای آینده)؛ سرویس dev با (bun run dev &) در پوسته ماندگار؛ agent-browser input dispatch در این محیط خراب بود (هیچ رویدادی نمی‌فرستاد) → تعامل با dispatch رویدادی JS (PointerEvent+MouseEvent کامل؛ نکته Radix Select: option با pointerdown از نوع touch + click انتخاب می‌شود)؛ E2E: کارت آماری→ناوبری ✓، اکنون=زمان واقعی ۰۹:۵۸ ✓، انتخاب بانک ملی+کارت سامان (تشخیص خودکار بج) ✓، قالب پیام با RF-987654321 ✓، ثبت پرداخت+پیامک مشتری sent ✓، ۲ هشدار مدیر sent ✓، ذخیره آواتار vector (سربرگ SVG شد) ✓، موبایل 390px بدون سرریز افقی + پابرگ چسبان ✓، lint پاک + tsc پاک + کنسول پاک ✓
+   551→- **پاک‌سازی داده آزمایشی**: اجرای دوباره prisma/seed.ts (۳ حساب + ۷۰۷۹ کالا + ۴ قالب)؛ تنظیم هشدار مدیران ریست شد (خاموش/بدون گیرنده، قالب باقی است) — مدیران باید شماره موبایل خود را از «حساب من» تکمیل و در مرکز پیامک فعال کنند؛ تلفن‌های آزمایشی پاک شدند
+   552→
+   553→Stage Summary:
+   554→- **RTL کامل و ریشه‌ای**: DirectionProvider + tabs dir=rtl — کل سامانه (داشبورد، فرم‌ها، جدول‌ها، دیالوگ‌ها) راست‌به‌چپ واقعی؛ علت باگ قدیمی: رندر پیش‌فرض ltr رادیکس
+   555→- **داشبورد تعاملی**: همه کارت‌های آماری و ویجت‌ها به صفحه مرتبط ناوبری می‌کنند (کیبورد+ARIA)
+   556→- **بارکد چندگانه هلو**: کالا با چند «كد كالا» از طریق alias شناسایی می‌شود — مدیریت کامل در ویرایش کالا
+   557→- **پیامک درست**: کد رهگیری بانکی در متن پیام (نه شماره سند) + بازتاب خودکار تغییرها + اعتبارسنجی لان کارت مدیر
+   558→- **هشدار مدیران**: سوییچ‌پذیر + انتخاب گیرندگان + قالب قابل ویرایش — E2E تأیید شده
+   559→- **آواتار دوبعدی SVG**: سازنده کامل ۱۱ دسته‌ای سبک و بدون سنگینی + حالت عکس و حروف باقی
+
+[showing lines 375-559 of 561; use offset=560 with limit to continue reading]

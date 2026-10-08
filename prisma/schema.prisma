@@ -1,0 +1,208 @@
+// Hyper Zeytoon — Returns Management Platform
+// سامانه ثبت مرجوعی کالای هایپر زیتون (رفسنجان)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// کاربران: صندوقدارها، مدیر کل (خانم لطفی)، مدیر فروشگاه (آقای نوروزی) و مدیر ارشد سامانه (کیانوش صفاپور)
+model User {
+  id             String   @id @default(cuid())
+  username       String   @unique
+  passwordHash   String
+  fullName       String
+  role           String   @default("cashier") // "admin" | "gm" | "owner" | "cashier"
+  phone          String?
+  // آواتار کاربر — رشته JSON: {type:"initials"|"emoji"|"photo", color?, emoji?, photo?}
+  avatar         String?
+  isActive       Boolean  @default(true)
+  // ---- مجوزهای عملیاتی (مستقل از نقش — قابل تنظیم توسط مدیر ارشد/مالک) ----
+  // ثبت مرجوعی مثل صندوقدار (مثلاً مدیر کل خانم لطفی هم صندوقداری می‌کند)
+  canActAsCashier   Boolean @default(false)
+  // تأیید مرجوعی‌ها (مدیر کل / مالک / مدیر ارشد — پیش‌فرض از نقش)
+  canApproveReturns Boolean @default(false)
+  // ثبت پرداخت و انتقال وجه (پیش‌فرض فقط مالک آقای نوروزی + منتخب‌های صریح)
+  canRecordPayment  Boolean @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  returnRequests ReturnRequest[]
+  payments       Payment[]
+  activities     ActivityLog[]
+  approvals      ReturnRequest[] @relation("ReturnApprovals")
+}
+
+// بانک کالا (سازگار با هلو APEX)
+model Product {
+  id        String   @id @default(cuid())
+  code      String? // کد کالا (هلو)
+  barcode   String?
+  name      String
+  unit      String   @default("عدد")
+  price     Int      @default(0) // قیمت فروش (ریال)
+  stock     Int?
+  category  String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  returnItems ReturnItem[]
+  // بارکدهای چندگانه (هلو: هر کالا می‌تواند چند «كد كالا» داشته باشد —
+  // گزارش موجودی هلو فقط بارکد نخست را می‌آورد؛ بقیه اینجا دستی ثبت می‌شوند)
+  extraBarcodes ProductBarcode[]
+
+  @@index([barcode])
+  @@index([name])
+}
+
+// بارکد/کد جایگزین کالا — شناسایی کالا با هر یک از بارکدهای هلو
+model ProductBarcode {
+  id        String   @id @default(cuid())
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  code      String // بارکد جایگزین (ارقام)
+  createdAt DateTime @default(now())
+
+  @@unique([productId, code])
+  @@index([code])
+}
+
+// درخواست مرجوعی
+model ReturnRequest {
+  id                String   @id @default(cuid())
+  code              String   @unique // شماره پیگیری: HZ-XXXXXX
+  customerName      String
+  customerPhone     String
+  customerCardNumber String // کارت بانکی مشتری (۱۶ رقم)
+  purchaseAt        DateTime // زمان خرید مشتری
+  reason            String // دلیل مرجوعی
+  note              String?
+  totalAmount       Int // جمع کل اقلام (ریال)
+  // تسویه با مشتری: تبادل کالا / کسری / بدهی
+  exchangeValue     Int      @default(0) // ارزش کالا/خدمات جایگزین که مشتری برداشته (ریال)
+  transferAmount    Int? // مبلغ قابل انتقال به حساب مشتری (null = مجموع اقلام؛ سازگاری با داده‌های قدیمی)
+  transferNote      String? // دلیل اختلاف مبلغ انتقالی با جمع اقلام
+  settlementType    String   @default("full") // full | exchange | partial | debt
+  status            String   @default("pending") // pending | approved | paid
+  // تأیید بدون پرداخت (مرجوعی تبادلی — مدیر کل خانم لطفی تأیید می‌کند)
+  approvedById      String?
+  approvedBy        User?    @relation("ReturnApprovals", fields: [approvedById], references: [id])
+  approvedAt        DateTime?
+  cashierId         String
+  cashier           User     @relation(fields: [cashierId], references: [id])
+  submittedAt       DateTime @default(now())
+
+  items             ReturnItem[]
+  payment           Payment?
+  smsLogs           SmsLog[]
+
+  @@index([status])
+  @@index([cashierId])
+  @@index([submittedAt])
+}
+
+// اقلام مرجوعی
+model ReturnItem {
+  id        String  @id @default(cuid())
+  requestId String
+  request   ReturnRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  productId String?
+  product   Product?      @relation(fields: [productId], references: [id])
+  name      String
+  barcode   String?
+  code      String? // کد کالا (هلو)
+  // مقدار اعشاری پشتیبانی می‌شود — کالاهای وزنی (سوسیس/آجیل/خواربار)
+  quantity  Float
+  unitPrice Int // قیمت واحد (ریال)
+  lineTotal Int // رُندشده به ریال
+
+  @@index([requestId])
+}
+
+// اطلاعات پرداخت (انتقال وجه توسط مدیر)
+model Payment {
+  id              String   @id @default(cuid())
+  requestId       String   @unique
+  request         ReturnRequest @relation(fields: [requestId], references: [id])
+  amount          Int // مبلغ پرداختی (ریال)
+  bankName        String // بانک مبدأ
+  accountNumber   String? // شماره حساب مبدأ
+  cardNumber      String? // شماره کارت مبدأ
+  referenceNumber String? // شماره پیگیری/ارجاع
+  transferredAt   DateTime // زمان انتقال
+  recordedById    String
+  recordedBy      User     @relation(fields: [recordedById], references: [id])
+  createdAt       DateTime @default(now())
+}
+
+// دفترچه مشتریان — رکورد دائمی هر مشتری (کلید: شماره موبایل نرمال‌شده)
+// پیامک‌های خودکار فقط برای مشتری‌هایی ارسال می‌شود که smsEnabled دارند (کلید دوم لایه دوگانه)
+model Customer {
+  id         String   @id @default(cuid())
+  phone      String   @unique // 09xxxxxxxxx
+  name       String
+  smsEnabled Boolean  @default(true)
+  note       String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+// تنظیمات سامانه (مدیریت توسط مدیر ارشد/مالک) — کلید/مقدار
+model Setting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+// قالب پیامک اطلاع‌رسانی به مشتری — مدیران می‌توانند نوع جدید تعریف کنند
+// انواع پیش‌فرض: مرجوعی کالا / اختلاف قیمت / خطای کارت‌خوان / سایر
+model SmsTemplate {
+  id        String   @id @default(cuid())
+  title     String // نام نوع پیام (مثلاً «مرجوعی کالا»)
+  body      String // متن پیام با جای‌نگهدارهای {{مشتری}} {{مبلغ_تومان}} …
+  isActive  Boolean  @default(true)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  logs SmsLog[]
+}
+
+// گزارش ارسال پیامک به مشتری (پس از ثبت/تأیید پرداخت)
+model SmsLog {
+  id         String   @id @default(cuid())
+  requestId  String?
+  request    ReturnRequest? @relation(fields: [requestId], references: [id], onDelete: SetNull)
+  templateId String?
+  template   SmsTemplate?  @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  phone      String // شماره مقصد (نرمال‌شده 09xxxxxxxxx)
+  message    String // متن ارسال‌شده
+  amount     Int? // مبلغ پرداخت مرتبط (ریال)
+  status     String // "sent" | "failed"
+  provider   String? // پنل ارسال‌کننده
+  messageId  String? // شناسه پیام در پنل
+  response   String? // خلاصه پاسخ/خطای پنل
+  createdAt  DateTime @default(now())
+
+  @@index([requestId])
+  @@index([createdAt])
+}
+
+// تاریخچه فعالیت کاربران
+model ActivityLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id])
+  action    String // login | logout | return_submit | payment_record | product_import | user_create | ...
+  detail    String?
+  entityId  String?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([createdAt])
+}

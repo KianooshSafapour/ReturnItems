@@ -1,0 +1,172 @@
+     1→# Worklog — Hyper Zeytoon Returns Management Platform (هایپر زیتون)
+     2→
+     3→Project: سامانه ثبت و پیگیری مرجوعی کالا — هایپر زیتون، رفسنجان، کرمان
+     4→Owner: آقای نوروزی | Developer: کیانوش صفاپور (Kianoosh Safapour)
+     5→
+     6→---
+     7→Task ID: 1
+     8→Agent: main (Z.ai Code)
+     9→Task: Research phase — academic/scholar UX research + Holoo APEX format research + environment analysis
+    10→
+    11→Work Log:
+    12→- Analyzed uploaded image path /home/z/my-project/upload/20260927_213723.jpg → file does not exist (empty upload dir); proceeded with flexible Holoo-compatible column mapping
+    13→- Web search: RMA/POS UX best practices → barcode-first workflows, automatic total calculation, minimal input friction
+    14→- Web search: academic research on retail returns & POS systems → barcode scanning + auto-calc = efficiency (Letran Research Center, Retail Route studies)
+    15→- Web search: fraud/internal control research → segregation of duties validated (cashier records return, owner authorizes payment — matches requested workflow)
+    16→- Web search: Holoo APEX (System Group) → Excel import for product lists with columns: کد کالا، نام کالا، بارکد، قیمت فروش، میانگین قیمت خرید، آخرین قیمت خرید، موجودی، واحد
+    17→- Inspected existing project scaffold: Next.js 16 + React 19 + Tailwind 4 + shadcn/ui + Prisma(SQLite) + sonner + framer-motion + recharts
+    18→- Installed: xlsx (SheetJS) for XLS import/export
+    19→- Downloaded Vazirmatn font (Regular/Medium/SemiBold/Bold/ExtraBold woff2) to public/fonts/
+    20→
+    21→Stage Summary:
+    22→- Research-grounded design decisions: (1) barcode-first + Enter-to-add (keyboard wedge scanners), (2) auto-computed totals with Persian words in Rial+Toman, (3) two-role segregation (cashier submits / owner pays), (4) flexible Holoo header aliases for XLS import, (5) full Persian RTL UI with Jalali calendar
+    23→- Architecture: single-page app at `/` with client-side views (login → cashier/owner workspace) + API routes under /api/*
+    24→- Auth: custom HMAC-signed cookie token + scrypt password hashing (no extra deps)
+    25→- Tech: Prisma models User/Product/ReturnRequest/ReturnItem/Payment/ActivityLog
+    26→
+    27→---
+    28→Task ID: 3-b
+    29→Agent: full-stack-developer (management views)
+    30→Task: Products/users/activity views + paginated product list API
+    31→
+    32→Work Log:
+    33→- Read worklog + all contract files (types.ts, api-helpers.ts, auth.ts, money.ts, jalali.ts, holoo.ts, products/users/activity API routes, globals.css) — confirmed jsonOk returns flat envelope (no `data` wrapper), import field name is `file`, import response is flat ImportReport, session cookie is `hz_session`
+    34→- Extended src/app/api/products/route.ts with `mode=list` branch placed before existing search logic (search 100% intact): page (1-based) / pageSize (default 20, max 100) / optional q (name/barcode/code contains) / optional category; returns { products, total, page, pageSize, categories } with distinct Persian-sorted categories of active products; requireUser() auth; NO ActivityLog (read op); typed via Prisma.ProductWhereInput, count+findMany+distinct in Promise.all
+    35→- Created src/components/hz/products-view.tsx — ProductsView({ user }): Tabs «بانک کالا» / «ورود از اکسل (هلو)»; bank tab = debounced search + category Select + refresh + table (نام/بارکد فارسی/کد/دسته/قیمت با تولتیپ تومانی/موجودی), sticky header, max-h-[520px] scroll, skeletons, PackageSearch empty state, «نمایش X تا Y از Z کالا» + RTL pagination (قبلی راست/ChevronRight، بعدی/ChevronLeft); import tab = Holoo APEX compatibility card (7 column chips + alias hints + matching priority + header auto-detect notes + owner-only note), template download via window.open('/api/products/template'), drag&drop+click+keyboard upload zone (.xlsx/.xls/.csv, 8MB), priceUnit select (ریال/تومان) sent as form field, POST /api/products/import with `file`, success toast + ImportReport card (stats grid, sheetName, headerRow, mapping table, priceUnit note, errors max-h-40) + «رفرش بانک کالا»
+    36→- Created src/components/hz/users-view.tsx — UsersView({ user, onChanged }): GET /api/users table (نام کامل+«شما» badge، نام کاربری، نقش badge مدیر/صندوقدار، تماس، مرجوعی، پرداخت، Switch فعال/غیرفعال، تاریخ جلالی) max-h-[520px] sticky header; «افزودن صندوقدار» Dialog با اعتبارسنجی فارسی (fullName≥3، username لاتین [a-z0-9_.-]{3,30}، موبایل اختیاری 09xxxxxxxxx، گذرواژه≥6) → POST؛ DropdownMenu ردیفی (بازنشانی گذرواژه Dialog + فعال/غیرفعال PATCH)؛ ردیف مدیر فقط Badge «حساب مدیر» بدون عملیات؛ toasts + onChanged
+    37→- Created src/components/hz/activity-view.tsx — ActivityView({ user }): GET /api/activity?limit=100؛ خط زمانی عمودی RTL (border-s-2 + آیکون دایره‌ای روی خط) با آیکون/رنگ/برچسب فارسی هر اکشن (login/logout/return_submit/payment_record/product_import/user_create/user_activate/user_deactivate/user_reset_password + پیش‌فرض)؛ هر ورودی: نام + badge نقش + برچسب کنش + جزئیات + تاریخ جلالی؛ refresh + skeletons + max-h-[520px]
+    38→- Sticky-header decision: shadcn Table's built-in overflow-x-auto wrapper breaks thead sticky under an outer vertical scroller → used codebase's proven pattern (raw table + TableHeader/TableHead/… styling components, overflow-x-auto OUTSIDE max-h overflow-y-auto) identical to return-history.tsx
+    39→- Verified: bun run lint → 0 issues in my 4 files (4 pre-existing problems belong to other agents' files); bunx tsc --noEmit → 0 errors in my files; curl smoke tests with owner cookie (norouzi): mode=list page/pageSize/q/category ✅، حالت جستجوی قبلی دست‌نخورده ✅، 401 بدون کوکی ✅؛ dev.log بدون خطای کامپایل
+    40→- Wrote agent-ctx/3-b-full-stack-developer.md
+    41→
+    42→Stage Summary:
+    43→- New: src/components/hz/products-view.tsx، src/components/hz/users-view.tsx، src/components/hz/activity-view.tsx — همه 'use client'، export نامی، فارسی/ارقام فارسی، بدون آبی/نیلی، فقط متغیرهای تم
+    44→- Modified: فقط src/app/api/products/route.ts (افزودن حالت list بدون دست‌کاری جستجو)
+    45→- تصمیم‌ها: پاسخ import مسطح است (نه تو در تو با report) — مطابق مسیر واقعی؛ خط زمانی سمت راست با border-s؛ خودکار fresh شدن زبانه بانک پس از ورود اکسل به دلیل unmount شدن TabsContent غیرفعال
+    46→- آزموده: lint/tsc تمیز در فایل‌های من؛ API با curl (۴۵ کالا، ۱۷ دسته، فیلترها و صفحه‌بندی صحیح)
+    47→
+    48→---
+    49→Task ID: 3-a
+    50→Agent: full-stack-developer (owner dashboard)
+    51→Task: Build owner dashboard + notification bell components
+    52→
+    53→Work Log:
+    54→- Read worklog.md + all shared contracts: types.ts (StatsDTO/NotificationDTO/SessionUser), ornaments.tsx, money-input.tsx (MoneyDisplay), lib/money.ts, lib/jalali.ts, api/stats + api/notifications routes, api-helpers.ts, globals.css utilities, login-view.tsx for design language
+    55→- CONFIRMED: jsonOk() returns the raw DTO (no {ok,data} wrapper) — clients parse `StatsDTO | {error}` directly; error responses are `{error: string}` with non-200 (verified live via curl with owner login)
+    56→- Created src/components/hz/owner-dashboard.tsx: fetches GET /api/stats; header (eyebrow greeting with user.fullName + «داشبورد مدیریت» + subtitle mentioning آقای نوروزی + refresh button with spin state + Jalali last-updated time + IlluminatedDivider); 4 stat cards (pending=chart-2 saffron/hourglass, paid=primary/check-circle, paid-month=chart-3/calendar, total=chart-4/package) with framer-motion stagger entrance, CSS hover lift, pattern-girih overlay revealed on group-hover (opacity transition — custom utilities don't support hover: variants in TW4), num tabular digits, MoneyDisplay(size md, no words)
+    57→- Charts (recharts, dir="ltr" wrappers for stable SVG text anchoring): 14-day AreaChart of series[].amount converted to هزار تومان (amount/10000, labeled «مقیاس محور عمودی: هزار تومان») with Jalali short X labels («۱۲ مهر» via toJalali+JALALI_MONTHS local-date parsing), Persian custom tooltips with full Rial; horizontal BarChart of topProducts (layout vertical, YAxis category orientation=right width 150 + name truncation, XAxis reversed+hide with 1.25 domain padding, RTL bars anchored right growing left, radius [6,0,0,6], LabelList quantities in Persian digits)
+    58→- Two info cards: «عملکرد صندوقدارها» (sorted desc by returnCount, rank chips, active/inactive Badge, max-h-72 overflow-y-auto) and «مرجوعی‌های اخیر» (5 rows: code ltr, customer, formatMoney rial, status Badge matching return-history styling, cashier, Jalali datetime, max-h-72 overflow-y-auto)
+    59→- States: full skeleton layout on first load; Persian error card (CloudOff + retry) when no data; toast + keep stale data on refresh failure; onChanged?.() fired via ref after each successful load (loop-safe)
+    60→- Created src/components/hz/notification-bell.tsx: owner-only (early return after hooks); polls GET /api/notifications every 30s + on window focus + on dropdown open (setTimeout(0) for initial to satisfy react-hooks/set-state-in-effect); ghost icon Button (size-11 touch target) with Bell, framer-motion gentle scale pulse while pendingCount>0, destructive count Badge at logical -end corner (۹۹+ cap); DropdownMenu dir="rtl" on Root (radix renders dir on content — Content itself doesn't accept dir prop in radix 1.2.15); dark-styled DropdownContent via `dark` class trick (token vars resolve to dark palette for content+descendants) with pattern-tile header showing total pending amount (rial+toman), latest pending items (code/customer/formatMoney/cashier/Jalali datetime, onSelect→onOpenPending), empty state, footer «مشاهده همه» item + last-checked serverTime
+    61→- Ran bunx eslint on both files → clean; fixed TS2322 (moved dir="rtl" from DropdownMenuContent to DropdownMenu Root) and set-state-in-effect (deferred initial poll); bunx tsc --noEmit → zero errors in my files; dev.log tail → healthy, no compile errors
+    62→
+    63→Stage Summary:
+    64→- Files created: src/components/hz/owner-dashboard.tsx, src/components/hz/notification-bell.tsx (no existing file modified; page.tsx untouched)
+    65→- Key decisions: raw-DTO API parsing (jsonOk has no wrapper); pattern-girih hover via opacity overlay (TW4 custom utilities lack variant support); charts use var(--chart-1..5)/primary tokens only (no blue/indigo); bar chart mirrored for RTL (names right, bars grow left); notification dropdown darkened with `dark` class so CSS-variable tokens flip to dark palette; bell polls silently (non-critical), dashboard refresh failures degrade to toast; onChanged contract = called after each successful stats load
+    66→- Integration notes for next agent (3-b): mount <OwnerDashboard user={user} onChanged={...}/> in owner tab; <NotificationBell user={user} onOpenPending={...}/> in app header — onOpenPending should switch to pending returns list (e.g., statusFilter="pending" ReturnHistory)
+    67→- Lint status: my 2 files pass ESLint + tsc cleanly; remaining repo lint errors are pre-existing in jalali-datetime-picker.tsx:56 and return-history.tsx:279 (react-hooks/set-state-in-effect, not touched per task rules)
+    68→
+    69→---
+    70→Task ID: 2 / 4 / 5
+    71→Agent: main (Z.ai Code)
+    72→Task: Fix font build error, assemble main app shell (page.tsx), fix lint/a11y errors, full E2E verification — finalize v0.1_PreAlpha «$»
+    73→
+    74→Work Log:
+    75→- Fixed font build error: localFont paths in src/app/layout.tsx were `../public/fonts/...` (resolved to src/public/) → corrected to `../../public/fonts/...`; dev server recompiled clean (GET / 200)
+    76→- Fixed 2 pre-existing lint errors (react-hooks/set-state-in-effect): jalali-datetime-picker.tsx moved open-sync into handleOpenChange event handler; return-history.tsx ReturnDetailDialog restructured to derived-state pattern (fetched/current/loading computed, setFetched only in async callbacks, cleanup via handleClose)
+    77→- Removed 2 unused eslint-disable directives (jalali-datetime-picker, return-form)
+    78→- Wrote src/app/page.tsx — full app shell: session bootstrap via /api/auth/me with branded splash, LoginView, sticky header (BrandEmblem + version badge v0.1_PreAlpha «$» + NotificationBell for owner + user card + logout), role-based Tabs (cashier: ثبت مرجوعی/تاریخچه من; owner: داشبورد/در انتظار پرداخت/آرشیو/بانک کالا/صندوقدارها/فعالیت‌ها), refreshTick wiring (payment → dashboard refresh, keyed remounts on tab switch), sticky footer with credit کیانوش صفاپور (Kianoosh Safapour) + version
+    79→- Fixed a11y console errors: ReturnDetailDialog loading branch now renders sr-only DialogTitle + DialogDescription; loaded branch got sr-only DialogDescription
+    80→- E2E verified via agent-browser: cashier login (zahra) → filled return form (name/mobile/Jalali date/Luhn-valid card 6037997512345670 → بانک ملی detected) → barcode scan 6260001000001 auto-added «برنج هاشمی درجه یک ۵ کیلوگرم» @ ۲٬۸۵۰٬۰۰۰ → qty 2 → reason «کالا معیوب» → submit → success screen HZ-14050708-0003 → history shows it
+    81→- E2E owner flow: login (norouzi) → bell shows «۲ مرجوعی در انتظار پرداخت» → dropdown lists pending → «مشاهده همه» → pending tab → detail dialog → payment form (بانک صادرات + transfer date ۸ مهر + ref 84315920) → «ثبت پرداخت و بایگانی» → pending count 1 → archive shows «پرداخت شد» → detail shows full payment info + recorded-by علیرضا نوروزی
+    82→- E2E Holoo import: generated 4-row XLS with Persian Holoo headers → upload → import report: sheet «کالاها», header row 1, 3 rows, 2 created + 1 updated (برنج هاشمی price updated by barcode match), full column mapping displayed; DB verified (new کاله product @ 62000, hashemi 2850000→2950000)
+    83→- E2E export: /api/returns/export → 200, 20904-byte XLS with 2 sheets (خلاصه مرجوعی + اقلام مرجوعی), Persian headers incl. payment fields, 3 data rows
+    84→- E2E layout: mobile 390px no horizontal overflow (bodyW=vw=390); footer sticks to viewport bottom when content short (footerBottom=1600=winH) and pushes naturally when long
+    85→- Final: bun run lint = 0 problems; dev.log clean (no compile/runtime errors)
+    86→
+    87→Stage Summary:
+    88→- v0.1_PreAlpha codename «$» COMPLETE and browser-verified end-to-end
+    89→- Full stack live: Next.js shell + 12 API routes + 10 hz components + Prisma/SQLite (4 users, 47 products, 3 returns)
+    90→- All user requirements verified: cashier private accounts, return form (all fields + auto cashier/timestamp), barcode auto-find, name search, Holoo XLS import/export, owner notification → payment (bank + transfer datetime) → archive, per-user activity history, Persian RTL dark theme with Kerman/Rafsanjan motifs, 3-digit grouping + Persian words (IRR + Toman) under every price, Jalali calendar, credit کیانوش صفاپور
+    91→- Known minor: notification bell polls every 30s (count updates on next poll after payment — acceptable)
+    92→- Suggested next phase: camera-based barcode scanning (@zxing/browser), receipt print view, Jalali month filtering in archive, owner monthly PDF report, cashier performance chart trends, DB backup endpoint
+    93→
+    94→---
+    95→Task ID: 6-a
+    96→Agent: full-stack-developer (user editing)
+    97→Task: User edit APIs + users-view edit dialog + profile menu
+    98→
+    99→Work Log:
+   100→- Read worklog + contracts: auth.ts (verifyPassword exists — no inline scrypt needed), api-helpers (flat jsonOk), users routes, users-view, page.tsx, types.ts, validators.ts (server-safe), activity-view ACTION_META, prisma seed (norouzi/Zeytoon@1404, zahra/Cashier@123)
+   101→- Rewrote PATCH /api/users/[id]: owner-only; accepts fullName (3-100), username (^a-z0-9_.-{3,30}$ + uniqueness vs others → «این نام کاربری قبلاً ثبت شده است»), phone (""/null clears, else 09xxxxxxxxx validated), password (min 6, keeps user_reset_password log), isActive (keeps guards + user_activate/user_deactivate logs); role field ignored; ALL validation before any write; profile changes → ONE user_update log «ویرایش کاربر «X»: نام کامل، شماره تماس»; owner can edit own row; jsonOk({ok:true})
+   102→- Created POST /api/auth/password: any user; verifyPassword(current) else 400 «گذرواژه فعلی نادرست است»; new min 6; hash update + user_password_change log «تغییر گذرواژه توسط خود کاربر»
+   103→- Created /api/auth/profile: GET (own user + phone for prefill) + PATCH (self-service fullName/phone; user_update log «به‌روزرسانی مشخصات شخصی: …»; returns {user:{id,username,fullName,role,phone}} — username NOT changeable here)
+   104→- users-view.tsx: owner row now keeps «حساب مدیر» badge AND gets ops dropdown (ویرایش اطلاعات + بازنشانی گذرواژه, no deactivate); cashier dropdown gains «ویرایش اطلاعات» (Pencil) first; new EditUserDialog (fullName/username ltr/phone/optional password with eye/وضعیت Switch disabled for owner) — sends ONLY changed fields, toast «کاربر به‌روزرسانی شد», reload + onChanged; Persian inline validation like add dialog
+   105→- Created profile-menu.tsx: ProfileMenu({user,onUserUpdated?,onLogout?}) — avatar ghost button (size-9 rounded-full bg-primary/15 text-primary border) → DropdownMenu dir=rtl (dir on Root) with header (initial+name+username+role badge), «حساب من و امنیت» (UserCog) → Dialog «حساب کاربری من»: مشخصات section (read-only username row + Lock «نام کاربری قابل تغییر نیست», fullName, phone prefetched from GET /api/auth/profile, «ذخیره مشخصات» → PATCH → toast + onUserUpdated), Separator, تغییر گذرواژه section (3 password inputs with individual eye toggles, ltr; new≥6 + repeat match; POST → «گذرواژه با موفقیت تغییر کرد»), role meta; state reset in click handler (lint-safe set-state-in-effect avoided); DialogTitle+Description present
+   106→- page.tsx: user card kept; ProfileMenu added after it (onUserUpdated={(u)=>setUser(u)}, onLogout={handleLogout}); old standalone logout icon Button REMOVED + unused imports cleaned
+   107→- types.ts: SessionUser += optional phone?: string|null; activity-view.tsx: += ACTION_META user_update (UserCog/primary/«ویرایش کاربر») + user_password_change (ShieldCheck/chart-1/«تغییر گذرواژه») — existing icons untouched
+   108→- FIXED critical UX bug found in browser test: account dialog taller than viewport (577px headless) → submit buttons unreachable; added max-h-[calc(100dvh-2rem)] overflow-y-auto to profile-menu + EditUserDialog DialogContent
+   109→- Verified: bun run lint = 0 problems; tsc --noEmit 0 errors in my files; dev.log clean
+   110→- API smoke (bun fetch, 21/21 ✅): owner PATCH fields/username-taken/invalid fullName/phone/self-deactivate 400s, owner self profile via users API, GET/PATCH /api/auth/profile, wrong current → «گذرواژه فعلی نادرست است», password change + re-login OK, cashier self profile + 403 on users PATCH, phone ""→null, user_update + user_password_change logs present; seed data restored (norouzi phone 09153456789)
+   111→- Browser E2E (agent-browser): header avatar menu replaces old logout; wrong password 400 + correct → success toast; profile save → header name refresh; users tab owner row dropdown + Switch disabled in owner edit dialog; invalid phone inline error + no request; edit save → toast + list reload; activity tab new labels; logout → login view; cashier sees ProfileMenu too
+   112→
+   113→Stage Summary:
+   114→- Modified: src/app/api/users/[id]/route.ts (PATCH rewrite), src/components/hz/users-view.tsx (edit dialog + pencil menu), src/components/hz/activity-view.tsx (2 new ACTION_META), src/components/hz/types.ts (SessionUser.phone?), src/app/page.tsx (ProfileMenu integration, logout button removed)
+   115→- Created: src/app/api/auth/password/route.ts (POST), src/app/api/auth/profile/route.ts (GET+PATCH), src/components/hz/profile-menu.tsx, agent-ctx/6-a-full-stack-developer.md
+   116→- API contracts: PATCH /api/users/[id] → {ok:true} (owner-only, changed-only application, user_update log); POST /api/auth/password {currentPassword,newPassword} → {ok:true} (any user); GET /api/auth/profile → {user incl. phone}; PATCH /api/auth/profile {fullName?,phone?} → {user incl. phone} (no username change)
+   117→- Decision: /api/auth/me + /api/auth/login untouched (no phone) — ProfileMenu fetches phone via GET /api/auth/profile on dialog open; dialog tall-content fix = max-h + overflow-y-auto pattern (must for small viewports)
+   118→
+   119→---
+   120→Task ID: 6 (RTL + user editing + real Holoo import)
+   121→Agent: main (Z.ai Code) + full-stack-developer subagent (Task 6-a)
+   122→Task: Fix RTL everywhere, add user/profile editing, import REAL Holoo inventory.xls (7140 products), full QA
+   123→
+   124→Work Log:
+   125→- REAL Holoo file analyzed (upload/inventory.xls, 7142 rows, BIFF/CP1256): columns رديف/كد كالا/نام كالا/مقدار/مقدار دوم/نام واحد/قيمت خريد/قيمت فروش/تعداد*في خريد — headers use ARABIC ك(0643)/ي(064A); «تعداد*في خريد» = مقدار × فی خرید (total inventory value, NOT count/price — user-reported mapping mistake fixed); last row = totals row
+   126→- REWROTE src/lib/holoo.ts: normalizeFa() converts Arabic→Persian chars (ك→ک ي→ی ة→ه أ/إ→ا + tatweel/direction marks); added real aliases (مقدار→stock, نام واحد→unit, في خريد→priceBuy); EXCLUDED_HEADERS blocklist (رديف، مقدار دوم، تعداد*في خريد، جمع/جمع کل...) checked BEFORE alias matching; cleanProductName strips -,*,_ prefixes (26/40/54 rows); looksLikeBarcode() infers barcode from 8/12/13/14-digit codes when file has no barcode column (6451 inferred); notes[] field added to parse result
+   127→- Import route optimized: single fetch of existing products → Map lookups (barcode→code→name priority), batched $transaction creates (500/chunk) + updates (200/chunk); MAX_SIZE 16MB; real file imports in ~2.5-4s for 7140 rows; idempotent re-import (0 created / 7140 updated)
+   128→- REAL DATA IMPORTED: 7140 Holoo products now live (7187 total with seeds); barcode 6260308300866 scan-tested → «ترشی بندری 240 گرم سحر» ۷۵۰٬۰۰۰ ریال auto-added
+   129→- User editing (Task 6-a subagent): PATCH /api/users/[id] extended (fullName/username uniqueness/phone/password/isActive + user_update activity log with changed-fields detail); NEW POST /api/auth/password (current password verification, user_password_change log); NEW GET/PATCH /api/auth/profile (self-service, user_update log); users-view.tsx edit dialog (all fields, owner row included but switch disabled); NEW profile-menu.tsx (حساب من و امنیت: profile save + password change with show/hide toggles, logout); page.tsx header integration (old logout button replaced); activity-view.tsx new action labels (ویرایش کاربر/تغییر گذرواژه)
+   130→- RTL fixes: owner-dashboard area chart now reversed XAxis (time flows right→left: ۲۶ شهریور at right → ۸ مهر at left, DOM-verified) + YAxis orientation=right; ui/select.tsx + ui/dropdown-menu.tsx roots default dir="rtl" (overridable); ui/command.tsx dir="rtl" — all dropdowns/listboxes verified dir=rtl in DOM
+   131→- products-view.tsx: Holoo guide updated to REAL columns (كد كالا/نام كالا/مقدار/نام واحد/قيمت فروش/قيمت خريد/بارکد) + explanation that رديف/مقدار دوم/تعداد*في خريد are ignored as computed + barcode-inference note; ImportReportCard displays notes[]; MAX_FILE_SIZE 16MB synced; ImportReport type + notes
+   132→- E2E verified via agent-browser: profile phone update (header+table refresh), wrong current password → «گذرواژه فعلی نادرست است», correct → «گذرواژه با موفقیت تغییر کرد» (password restored to Zeytoon@1404 after test), users edit (name+phone change verified in table, reverted), activity log shows all 4 new action types, category select RTL (dir=rtl), command palette RTL + real product search (8 results for ترشی), real barcode scan works, payment flow with bank select (29 banks RTL) + reference validation → «پرداخت مرجوعی HZ-DEMO-0001 ثبت و بایگانی شد ✅»
+   133→- VLM visual QA: dashboard/return-form/login screenshots reviewed — RTL confirmed, money formatting with Persian words confirmed, no visual defects; mobile 390px no horizontal overflow
+   134→- Final: bun run lint = 0 problems; dev.log clean; 0 browser console errors
+   135→
+   136→Stage Summary:
+   137→- All 3 user complaints resolved: (1) RTL implemented across charts/selects/dropdowns/command palette, (2) full user editing (manager edits any user + own profile/password; every role has «حساب من»), (3) real Holoo XLS imports correctly with exact column mapping (Arabic-char tolerant, مقدار=stock, تعداد*في خريد ignored as computed total)
+   138→- Platform now runs on REAL inventory: 7187 products, 6451 scannable barcodes
+   139→- Suggested next: camera barcode scanning (@zxing/browser), receipt print view, Jalali month filter in archive, owner monthly PDF report, DB backup endpoint
+   140→
+   141→---
+   142→Task ID: 7
+   143→Agent: main (Z.ai Code)
+   144→Task: Backend core for 3 new requirements — (1) barcode for ALL return items, (2) flexible settlement (exchange/credit/debt), (3) admin role + platform management APIs
+   145→
+   146→Work Log:
+   147→- Schema (db:push OK): ReturnRequest += exchangeValue Int @default(0) + transferAmount Int? (null=legacy coalesce to totalAmount) + transferNote String? + settlementType String @default("full"); User.role comment += "admin"; NEW Setting model (key/value/updatedAt)
+   148→- Created src/lib/barcode.ts (ISOMORPHIC — Web Crypto with Math.random fallback, NO node:crypto import): ean13CheckDigit/isValidEan13/generateInternalBarcode (prefix "2" in-store + 12 digits + Mod10 check) / ensureUniqueBarcodes (replaces missing/duplicate barcodes per request)
+   149→- src/lib/auth.ts: Role type += "admin"; NEW isManager(user) = owner|admin; requireOwner() now allows BOTH owner AND admin (all existing owner-gated APIs instantly admin-capable)
+   150→- BOOTSTRAPPED admin account: username=kianoosh / password=Kian@Zeytoon1404 / fullName=کیانوش صفاپور / role=admin (user_create activity log)
+   151→- types.ts: Role, ROLE_LABELS, isManagerRole, SettlementType + SETTLEMENT_META (full/exchange/partial/debt Persian labels+hints) + deriveSettlementType(total,exchange,transfer); ReturnItemDraft += barcodeLocked?; ReturnListRow/ReturnDetailDTO += exchangeValue/transferAmount/settlementType(+transferNote in detail); NotificationDTO.latest += transferAmount; NEW StoreSettings + DEFAULT_SETTINGS + AdminOverviewDTO + ProductEditDTO
+   152→- POST /api/returns: settlement fields validated (debt⇒transfer=0; transfer≤T−E; transferNote REQUIRED when X+E<T or E>T; settlementType derived server-side); ensureUniqueBarcodes() → EVERY stored item has barcode; activity log includes settlement summary; response += transferAmount/exchangeValue/settlementType
+   153→- GET /api/returns + /api/returns/[id]: += exchangeValue, transferAmount (??totalAmount), settlementType (+transferNote in detail)
+   154→- POST /api/returns/[id]/payment: amount = transferAmount ?? totalAmount; NEW noTransfer mode (body.noTransfer===true or transferAmount===0): skips bank/reference validation, stores amount=0 + bankName=«تسویه بدون انتقال وجه», payment_record log «بایگانی بدون انتقال وجه (تسویه با کالا/اعتبار)»
+   155→- stats + notifications routes: pending sums now use transferAmount coalesce (JS reduce over pending rows); recentReturns/latest += transferAmount + settlementType
+   156→- Export (holoo.ts + route): summary sheet += «ارزش کالای جایگزین (ریال)»، «مبلغ انتقالی (ریال/تومان)»، «نوع تسویه» (SETTLEMENT_LABELS)، «دلیل اختلاف تسویه»؛ «مبلغ کل» renamed «مبلغ کل اقلام»
+   157→- NEW GET /api/admin/overview: users/products/returns/payments counts + settlement breakdown (full/exchange/partial/debt counts, debtTotal, customerCreditTotal) + activityToday + dbSizeBytes
+   158→- NEW /api/admin/settings: GET (any logged-in user — branding) + PUT (manager-only, upsert per-key, settings_update log; keys: storeName/storeCity/storePhone/managerName/receiptFooter/developerCredit)
+   159→- NEW POST /api/products (manager-only): full validation + barcode/code uniqueness («این بارکد قبلاً برای «X» ثبت شده است») + product_create log
+   160→- NEW PATCH /api/products/[id] (manager-only): changed-only fields (name/unit/code/barcode/category/price/stock/isActive) + uniqueness vs others + product_update log with changed-field names
+   161→- users routes: POST accepts role (cashier/owner/admin, default cashier) with roleLabels log; PATCH accepts role with guards (cannot change OWN role; cannot leave zero active privileged owner|admin); deactivation guard extended to admin rows; GET re-sorted in JS (owner→admin→cashier by createdAt asc — old SQL orderBy role desc put admin last)
+   162→- return-form.tsx (frontend): imports Barcode/Wand2/ArrowLeftRight/Wallet/TriangleAlert/RefreshCw/Info/Repeat2 + generateInternalBarcode + SETTLEMENT_META/deriveSettlementType; state += exchangeValue/transferAmount/transferNote; auto-sync effect transferAmount=max(0,total−exchange) on total/exchange change; manual addItem pre-fills generateInternalBarcode() + barcodeLocked:false, DB items barcodeLocked:!!barcode; item rows: locked⇒Barcode Badge «از بانک کالا», editable⇒barcode Input (ltr/digits≤14) + «تولید» button (internal EAN-13 toast) + smart helper text (in-store prefix-2 explanation); validate() += barcode≥4digits + settlement rules + noteRequired; submit payload += exchangeValue/transferAmount/transferNote(digitsOnly barcode); success screen shows transfer amount + settlement badge breakdown; NEW بخش ۴ «تسویه با مشتری» (exchangeValue MoneyInput + transferAmount MoneyInput + «همگام» sync button + 3 computed cards T/net/transfer + debt destructive alert + credit info alert + exchange info + REQUIRED reason Textarea when partial/debt); sticky aside shows جمع اقلام + transfer breakdown lines
+   163→- FIXED self-inflicted incident: `git stash` (to check pre-existing tsc errors) briefly reverted TRACKED db/custom.db → SQLite handle went readonly → login 500s; restarted dev server (subshell background `(bun run dev > dev.log 2>&1 &)` pattern — persists across tool calls); data verified intact after pop
+   164→- VERIFIED via curl: norouzi(owner)+kianoosh(admin) login ✅; admin overview JSON ✅; settings GET defaults ✅; return POST debt scenario (manual item null barcode → auto 2490856296715 EAN-13, dup barcode kept when unique, settlementType=debt, transferNote stored) ✅; noTransfer payment (amount=0, bank=تسویه بدون انتقال وجه) ✅; partial validations (3×400 Persian errors) ✅; partial payment amount=100000 of 200000 ✅; product create→dup-400→PATCH changed:[قیمت، موجودی] ✅; role change hoseyn cashier→admin→cashier + own-role 400 guard ✅
+   165→- bunx tsc --noEmit: 0 errors in my files (products/import + seed + examples/skills errors are pre-existing on HEAD — verified via git stash comparison); eslint all my files clean
+   166→
+   167→Stage Summary:
+   168→- All 3 requirements' backend live: barcodes guaranteed on every return item (client pre-fill + server fallback), full settlement engine (T/E/X math + reasons + noTransfer archiving), admin role with platform-management APIs (settings/overview/products CRUD/roles)
+   169→- CRITICAL for Task 8 agents: DB column transferAmount is NULLABLE — ALWAYS coalesce `transferAmount ?? totalAmount` when reading; settlementType derived = debt if E>T / exchange if E>0∧X+E=T / partial if X+E<T / else full; payment.amount now = transfer amount (legacy rows = totalAmount); POST /api/returns response += transferAmount/exchangeValue/settlementType
+   170→- Admin credentials: kianoosh / Kian@Zeytoon1404 (role=admin); norouzi remains owner / Zeytoon@1404; zahra cashier / Cashier@123
+   171→- Dev server must be restarted with `(bun run dev > dev.log 2>&1 &)` subshell pattern (plain `&` dies with tool session)
+   172→

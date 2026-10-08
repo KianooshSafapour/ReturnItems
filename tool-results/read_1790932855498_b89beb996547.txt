@@ -1,0 +1,844 @@
+     1→"use client";
+     2→
+     3→// داشبورد مدیریت — نمای کلی برای آقای نوروزی: کارت‌های آماری، نمودار روند ۱۴ روز اخیر،
+     4→// پرمرجوع‌ترین کالاها، عملکرد صندوقدارها و آخرین مرجوعی‌های ثبت‌شده
+     5→
+     6→import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+     7→import {
+     8→  Area,
+     9→  AreaChart,
+    10→  Bar,
+    11→  BarChart,
+    12→  CartesianGrid,
+    13→  LabelList,
+    14→  ResponsiveContainer,
+    15→  Tooltip,
+    16→  XAxis,
+    17→  YAxis,
+    18→} from "recharts";
+    19→import {
+    20→  BarChart3,
+    21→  CalendarDays,
+    22→  CheckCircle2,
+    23→  Clock3,
+    24→  CloudOff,
+    25→  History,
+    26→  Hourglass,
+    27→  LayoutDashboard,
+    28→  Package,
+    29→  PackageCheck,
+    30→  RefreshCw,
+    31→  TrendingUp,
+    32→  TriangleAlert,
+    33→  UserRound,
+    34→  Users,
+    35→} from "lucide-react";
+    36→import type { LucideIcon } from "lucide-react";
+    37→import { Badge } from "@/components/ui/badge";
+    38→import { Button } from "@/components/ui/button";
+    39→import {
+    40→  Card,
+    41→  CardContent,
+    42→  CardDescription,
+    43→  CardHeader,
+    44→  CardTitle,
+    45→} from "@/components/ui/card";
+    46→import { Skeleton } from "@/components/ui/skeleton";
+    47→import { motion, type Variants } from "framer-motion";
+    48→import { toast } from "sonner";
+    49→import { MoneyDisplay } from "./money-input";
+    50→import { IlluminatedDivider, PistachioMotif } from "./ornaments";
+    51→import { formatMoney, formatNumber, toFaDigits } from "@/lib/money";
+    52→import { JALALI_MONTHS, formatJalaliDateTime, toJalali } from "@/lib/jalali";
+    53→import { cn } from "@/lib/utils";
+    54→import type { SessionUser, StatsDTO } from "./types";
+    55→
+    56→interface OwnerDashboardProps {
+    57→  user: SessionUser;
+    58→  onChanged?: () => void;
+    59→}
+    60→
+    61→/** نقطه سری زمانی برای نمودار روند (مبلغ به هزار تومان) */
+    62→interface SeriesPoint {
+    63→  date: string;
+    64→  count: number;
+    65→  amount: number;
+    66→  label: string;
+    67→  amountK: number;
+    68→}
+    69→
+    70→/** نقطه نمودار کالاها */
+    71→interface TopPoint {
+    72→  name: string;
+    73→  quantity: number;
+    74→  amount: number;
+    75→}
+    76→
+    77→/** برچسب کوتاه شمسی محور افقی: «۱۲ مهر» */
+    78→function shortJalali(isoDate: string): string {
+    79→  const [y, m, d] = isoDate.split("-").map((p) => parseInt(p, 10));
+    80→  const j = toJalali(new Date(y || 2025, (m || 1) - 1, d || 1));
+    81→  return `${toFaDigits(j.jd)} ${JALALI_MONTHS[j.jm - 1]}`;
+    82→}
+    83→
+    84→/** کوتاه‌سازی نام کالا برای برچسب محور عمودی */
+    85→function truncateName(name: string, max = 24): string {
+    86→  return name.length > max ? `${name.slice(0, max - 1)}…` : name;
+    87→}
+    88→
+    89→/* ---------- راهنماهای فارسی نمودارها ---------- */
+    90→
+    91→function AreaTooltip({
+    92→  active,
+    93→  payload,
+    94→}: {
+    95→  active?: boolean;
+    96→  payload?: ReadonlyArray<{ payload: SeriesPoint }>;
+    97→}) {
+    98→  if (!active || !payload || payload.length === 0) return null;
+    99→  const p = payload[0].payload;
+   100→  return (
+   101→    <div
+   102→      dir="rtl"
+   103→      className="rounded-xl border border-border/70 bg-popover/95 px-3.5 py-2.5 shadow-xl backdrop-blur-sm"
+   104→    >
+   105→      <p className="num text-[11px] font-bold text-chart-2">{p.label}</p>
+   106→      <p className="num mt-1 text-sm font-extrabold">
+   107→        {formatMoney(p.amount)}
+   108→        <span className="mr-1.5 text-[10px] font-medium text-muted-foreground">ریال</span>
+   109→      </p>
+   110→      <p className="num mt-0.5 text-[11px] text-muted-foreground">
+   111→        {toFaDigits(p.count)} مرجوعی در این روز
+   112→      </p>
+   113→    </div>
+   114→  );
+   115→}
+   116→
+   117→function BarTooltip({
+   118→  active,
+   119→  payload,
+   120→}: {
+   121→  active?: boolean;
+   122→  payload?: ReadonlyArray<{ payload: TopPoint }>;
+   123→}) {
+   124→  if (!active || !payload || payload.length === 0) return null;
+   125→  const p = payload[0].payload;
+   126→  return (
+   127→    <div
+   128→      dir="rtl"
+   129→      className="max-w-56 rounded-xl border border-border/70 bg-popover/95 px-3.5 py-2.5 shadow-xl backdrop-blur-sm"
+   130→    >
+   131→      <p className="text-xs font-bold leading-5">{p.name}</p>
+   132→      <p className="num mt-1 text-sm font-extrabold">
+   133→        {toFaDigits(p.quantity)}
+   134→        <span className="mr-1.5 text-[10px] font-medium text-muted-foreground">تعداد</span>
+   135→      </p>
+   136→      <p className="num mt-0.5 text-[11px] text-muted-foreground">
+   137→        {formatMoney(p.amount)}
+   138→        <span className="mr-1">ریال</span>
+   139→      </p>
+   140→    </div>
+   141→  );
+   142→}
+   143→
+   144→/* ---------- کارت‌های آماری ---------- */
+   145→
+   146→interface StatCardDef {
+   147→  key: string;
+   148→  title: string;
+   149→  icon: LucideIcon;
+   150→  iconClass: string;
+   151→  count: number;
+   152→  amount: number | null;
+   153→  note?: string;
+   154→}
+   155→
+   156→const statGridVariants: Variants = {
+   157→  hidden: {},
+   158→  show: { transition: { staggerChildren: 0.09 } },
+   159→};
+   160→
+   161→const statCardVariants: Variants = {
+   162→  hidden: { opacity: 0, y: 18 },
+   163→  show: { opacity: 1, y: 0, transition: { duration: 0.45, ease: "easeOut" } },
+   164→};
+   165→
+   166→export function OwnerDashboard({ user, onChanged }: OwnerDashboardProps) {
+   167→  const [stats, setStats] = useState<StatsDTO | null>(null);
+   168→  const [loading, setLoading] = useState(true);
+   169→  const [refreshing, setRefreshing] = useState(false);
+   170→  const [error, setError] = useState<string | null>(null);
+   171→  const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
+   172→
+   173→  const statsRef = useRef<StatsDTO | null>(null);
+   174→  const onChangedRef = useRef(onChanged);
+   175→  useEffect(() => {
+   176→    onChangedRef.current = onChanged;
+   177→  });
+   178→
+   179→  const load = useCallback(async (silent = false) => {
+   180→    if (silent) setRefreshing(true);
+   181→    else setLoading(true);
+   182→    try {
+   183→      const res = await fetch("/api/stats", { cache: "no-store" });
+   184→      const data = (await res.json()) as StatsDTO | { error: string };
+   185→      if (!res.ok || "error" in data) {
+   186→        const message = "error" in data ? data.error : "خطا در دریافت آمار";
+   187→        if (statsRef.current) toast.error("به‌روزرسانی آمار ناموفق بود");
+   188→        else setError(message);
+   189→        return;
+   190→      }
+   191→      statsRef.current = data;
+   192→      setStats(data);
+   193→      setUpdatedAt(new Date());
+   194→      setError(null);
+   195→      onChangedRef.current?.();
+   196→    } catch {
+   197→      if (statsRef.current) toast.error("ارتباط با سرور برقرار نشد");
+   198→      else setError("ارتباط با سرور برقرار نشد");
+   199→    } finally {
+   200→      setLoading(false);
+   201→      setRefreshing(false);
+   202→    }
+   203→  }, []);
+   204→
+   205→  useEffect(() => {
+   206→    load();
+   207→  }, [load]);
+   208→
+   209→  const seriesData = useMemo<SeriesPoint[]>(
+   210→    () =>
+   211→      (stats?.series ?? []).map((s) => ({
+   212→        ...s,
+   213→        label: shortJalali(s.date),
+   214→        amountK: Math.round(s.amount / 10000),
+   215→      })),
+   216→    [stats]
+   217→  );
+   218→
+   219→  const topProducts = useMemo<TopPoint[]>(
+   220→    () => (stats?.topProducts ?? []).map((p) => ({ name: p.name, quantity: p.quantity, amount: p.amount })),
+   221→    [stats]
+   222→  );
+   223→
+   224→  const sortedCashiers = useMemo(
+   225→    () => (stats?.cashiers ?? []).slice().sort((a, b) => b.returnCount - a.returnCount),
+   226→    [stats]
+   227→  );
+   228→
+   229→  const statCards: StatCardDef[] = stats
+   230→    ? [
+   231→        {
+   232→          key: "pending",
+   233→          title: "در انتظار پرداخت",
+   234→          icon: Hourglass,
+   235→          iconClass: "border-chart-2/30 bg-chart-2/10 text-chart-2",
+   236→          count: stats.pendingCount,
+   237→          amount: stats.pendingTotalAmount,
+   238→        },
+   239→        {
+   240→          key: "paid",
+   241→          title: "پرداخت‌شده (کل)",
+   242→          icon: CheckCircle2,
+   243→          iconClass: "border-primary/30 bg-primary/10 text-primary",
+   244→          count: stats.paidCount,
+   245→          amount: stats.paidTotalAmount,
+   246→        },
+   247→        {
+   248→          key: "paid-month",
+   249→          title: "پرداخت‌شده این ماه",
+   250→          icon: CalendarDays,
+   251→          iconClass: "border-chart-3/30 bg-chart-3/10 text-chart-3",
+   252→          count: stats.paidCountMonth,
+   253→          amount: stats.paidTotalAmountMonth,
+   254→        },
+   255→        {
+   256→          key: "total",
+   257→          title: "کل مرجوعی‌ها",
+   258→          icon: Package,
+   259→          iconClass: "border-chart-4/30 bg-chart-4/10 text-chart-4",
+   260→          count: stats.totalCount,
+   261→          amount: null,
+   262→          note: "مجموع مرجوعی‌های ثبت‌شده از ابتدای راه‌اندازی سامانه",
+   263→        },
+   264→      ]
+   265→    : [];
+   266→
+   267→  /* ---------- اسکلتون بارگذاری اولیه ---------- */
+   268→  if (loading && !stats) {
+   269→    return (
+   270→      <section aria-label="داشبورد مدیریت" className="space-y-6">
+   271→        <div className="flex flex-wrap items-center justify-between gap-4">
+   272→          <div className="flex items-center gap-3">
+   273→            <Skeleton className="size-12 rounded-2xl" />
+   274→            <div className="space-y-2">
+   275→              <Skeleton className="h-3.5 w-32" />
+   276→              <Skeleton className="h-6 w-44" />
+   277→              <Skeleton className="h-3.5 w-72 max-w-full" />
+   278→            </div>
+   279→          </div>
+   280→          <Skeleton className="h-9 w-32 rounded-md" />
+   281→        </div>
+   282→        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+   283→          {Array.from({ length: 4 }).map((_, i) => (
+   284→            <Card key={i}>
+   285→              <CardContent className="space-y-4">
+   286→                <div className="flex items-center gap-3">
+   287→                  <Skeleton className="size-11 rounded-2xl" />
+   288→                  <div className="flex-1 space-y-2">
+   289→                    <Skeleton className="h-3 w-20" />
+   290→                    <Skeleton className="h-6 w-14" />
+   291→                  </div>
+   292→                </div>
+   293→                <Skeleton className="h-9 w-full" />
+   294→              </CardContent>
+   295→            </Card>
+   296→          ))}
+   297→        </div>
+   298→        <div className="grid gap-4 lg:grid-cols-2">
+   299→          {Array.from({ length: 2 }).map((_, i) => (
+   300→            <Card key={i}>
+   301→              <CardHeader>
+   302→                <Skeleton className="h-5 w-48" />
+   303→                <Skeleton className="h-3.5 w-32" />
+   304→              </CardHeader>
+   305→              <CardContent>
+   306→                <Skeleton className="h-64 w-full" />
+   307→              </CardContent>
+   308→            </Card>
+   309→          ))}
+   310→        </div>
+   311→        <div className="grid gap-4 md:grid-cols-2">
+   312→          {Array.from({ length: 2 }).map((_, i) => (
+   313→            <Card key={i}>
+   314→              <CardHeader>
+   315→                <Skeleton className="h-5 w-40" />
+   316→              </CardHeader>
+   317→              <CardContent className="space-y-2.5">
+   318→                {Array.from({ length: 3 }).map((_, j) => (
+   319→                  <Skeleton key={j} className="h-16 w-full rounded-xl" />
+   320→                ))}
+   321→              </CardContent>
+   322→            </Card>
+   323→          ))}
+   324→        </div>
+   325→      </section>
+   326→    );
+   327→  }
+   328→
+   329→  return (
+   330→    <section aria-label="داشبورد مدیریت" className="space-y-6">
+   331→      {/* سربرگ */}
+   332→      <motion.header
+   333→        initial={{ opacity: 0, y: -10 }}
+   334→        animate={{ opacity: 1, y: 0 }}
+   335→        transition={{ duration: 0.5, ease: "easeOut" }}
+   336→        className="space-y-4"
+   337→      >
+   338→        <div className="flex flex-wrap items-center justify-between gap-4">
+   339→          <div className="flex items-center gap-3">
+   340→            <div className="glow-pistachio flex size-12 shrink-0 items-center justify-center rounded-2xl border border-primary/25 bg-primary/10">
+   341→              <LayoutDashboard className="size-6 text-primary" />
+   342→            </div>
+   343→            <div className="min-w-0">
+   344→              <p className="text-[11px] font-bold text-chart-2">خوش آمدید، {user.fullName}</p>
+   345→              <h2 className="mt-0.5 text-xl font-extrabold tracking-tight sm:text-2xl">
+   346→                داشبورد مدیریت
+   347→              </h2>
+   348→              <p className="mt-1 text-xs leading-6 text-muted-foreground sm:text-sm">
+   349→                نمای کلی مرجوعی‌های هایپر زیتون، رفسنجان — زیر نظر مدیریت محترم آقای نوروزی
+   350→              </p>
+   351→            </div>
+   352→          </div>
+   353→          <div className="flex flex-col items-stretch gap-1.5 sm:flex-row sm:items-center">
+   354→            <Button
+   355→              type="button"
+   356→              variant="outline"
+   357→              size="sm"
+   358→              onClick={() => load(true)}
+   359→              disabled={refreshing}
+   360→              className="h-9 font-semibold"
+   361→              aria-label="به‌روزرسانی آمار داشبورد"
+   362→            >
+   363→              <RefreshCw className={cn("size-4", refreshing && "animate-spin")} />
+   364→              {refreshing ? "در حال به‌روزرسانی…" : "به‌روزرسانی"}
+   365→            </Button>
+   366→            {updatedAt && (
+   367→              <p className="num flex items-center justify-center gap-1 whitespace-nowrap text-[11px] text-muted-foreground">
+   368→                <Clock3 className="size-3" />
+   369→                آخرین به‌روزرسانی: {formatJalaliDateTime(updatedAt)}
+   370→              </p>
+   371→            )}
+   372→          </div>
+   373→        </div>
+   374→        <IlluminatedDivider />
+   375→      </motion.header>
+   376→
+   377→      {/* خطا (بدون داده) */}
+   378→      {error && !stats ? (
+   379→        <motion.div
+   380→          initial={{ opacity: 0, scale: 0.98 }}
+   381→          animate={{ opacity: 1, scale: 1 }}
+   382→          transition={{ duration: 0.35, ease: "easeOut" }}
+   383→        >
+   384→          <Card className="border-destructive/30 bg-destructive/5">
+   385→            <CardContent className="flex flex-col items-center gap-4 py-12 text-center">
+   386→              <div className="flex size-16 items-center justify-center rounded-full border border-destructive/25 bg-destructive/10">
+   387→                <CloudOff className="size-8 text-destructive" />
+   388→              </div>
+   389→              <div className="space-y-1.5">
+   390→                <p className="font-extrabold">دریافت آمار داشبورد ناموفق بود</p>
+   391→                <p className="text-sm leading-6 text-muted-foreground">{error}</p>
+   392→              </div>
+   393→              <Button type="button" variant="outline" onClick={() => load()} className="font-semibold">
+   394→                <RefreshCw className="size-4" />
+   395→                تلاش دوباره
+   396→              </Button>
+   397→            </CardContent>
+   398→          </Card>
+   399→        </motion.div>
+   400→      ) : stats ? (
+   401→        <>
+   402→          {/* کارت‌های آماری */}
+   403→          <motion.div
+   404→            variants={statGridVariants}
+   405→            initial="hidden"
+   406→            animate="show"
+   407→            className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"
+   408→          >
+   409→            {statCards.map((s) => (
+   410→              <motion.div key={s.key} variants={statCardVariants} className="h-full">
+   411→                <Card className="group relative h-full overflow-hidden transition-all duration-300 hover:-translate-y-1 hover:border-primary/40 hover:shadow-xl">
+   412→                  <div
+   413→                    aria-hidden="true"
+   414→                    className="pattern-girih pointer-events-none absolute inset-0 opacity-0 transition-opacity duration-500 group-hover:opacity-100"
+   415→                  />
+   416→                  <CardContent className="relative flex h-full flex-col gap-4">
+   417→                    <div className="flex items-center gap-3">
+   418→                      <div
+   419→                        className={cn(
+   420→                          "flex size-11 shrink-0 items-center justify-center rounded-2xl border",
+   421→                          s.iconClass
+   422→                        )}
+   423→                      >
+   424→                        <s.icon className="size-5" />
+   425→                      </div>
+   426→                      <div className="min-w-0">
+   427→                        <p className="truncate text-xs font-semibold text-muted-foreground">{s.title}</p>
+   428→                        <p className="num text-2xl font-extrabold leading-tight">
+   429→                          {toFaDigits(s.count)}
+   430→                          <span className="mr-1.5 text-xs font-medium text-muted-foreground">مورد</span>
+   431→                        </p>
+   432→                      </div>
+   433→                    </div>
+   434→                    <div className="mt-auto border-t border-dashed pt-3">
+   435→                      {s.amount !== null ? (
+   436→                        <MoneyDisplay amount={s.amount} size="md" showWords={false} />
+   437→                      ) : (
+   438→                        <p className="text-[11px] leading-5 text-muted-foreground">{s.note}</p>
+   439→                      )}
+   440→                    </div>
+   441→                  </CardContent>
+   442→                </Card>
+   443→              </motion.div>
+   444→            ))}
+   445→          </motion.div>
+   446→
+   447→          {/* نمودارها */}
+   448→          <motion.div
+   449→            initial={{ opacity: 0, y: 20 }}
+   450→            animate={{ opacity: 1, y: 0 }}
+   451→            transition={{ duration: 0.5, delay: 0.15, ease: "easeOut" }}
+   452→            className="grid gap-4 lg:grid-cols-2"
+   453→          >
+   454→            {/* روند ۱۴ روز اخیر */}
+   455→            <Card className="group transition-all duration-300 hover:-translate-y-0.5 hover:border-primary/30 hover:shadow-lg">
+   456→              <CardHeader>
+   457→                <CardTitle className="flex items-center gap-2 text-base">
+   458→                  <TrendingUp className="size-4 text-primary" />
+   459→                  روند مبلغ مرجوعی‌ها — ۱۴ روز اخیر
+   460→                </CardTitle>
+   461→                <CardDescription>مقیاس محور عمودی: هزار تومان</CardDescription>
+   462→              </CardHeader>
+   463→              <CardContent>
+   464→                <div dir="ltr" className="h-64 w-full">
+   465→                  <ResponsiveContainer width="100%" height="100%">
+   466→                    <AreaChart data={seriesData} margin={{ top: 8, right: 0, bottom: 4, left: 8 }}>
+   467→                      <defs>
+   468→                        <linearGradient id="hz-owner-area" x1="0" y1="0" x2="0" y2="1">
+   469→                          <stop offset="0%" stopColor="var(--chart-1)" stopOpacity={0.32} />
+   470→                          <stop offset="100%" stopColor="var(--chart-1)" stopOpacity={0.02} />
+   471→                        </linearGradient>
+   472→                      </defs>
+   473→                      <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+   474→                      {/* راست‌به‌چپ: قدیمی‌ترین روز در راست، جدیدترین در چپ */}
+   475→                      <XAxis
+   476→                        dataKey="label"
+   477→                        reversed
+   478→                        tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
+   479→                        tickLine={false}
+   480→                        axisLine={{ stroke: "var(--border)" }}
+   481→                      />
+   482→                      <YAxis
+   483→                        orientation="right"
+   484→                        width={52}
+   485→                        allowDecimals={false}
+   486→                        tick={{ fontSize: 10, fill: "var(--muted-foreground)" }}
+   487→                        tickFormatter={(v: number) => formatNumber(v)}
+   488→                        axisLine={false}
+   489→                        tickLine={false}
+   490→                      />
+   491→                      <Tooltip
+   492→                        content={<AreaTooltip />}
+   493→                        cursor={{ stroke: "var(--border)", strokeDasharray: "4 4" }}
+   494→                      />
+   495→                      <Area
+   496→                        type="monotone"
+   497→                        dataKey="amountK"
+   498→                        name="مبلغ (هزار تومان)"
+   499→                        stroke="var(--chart-1)"
+   500→                        strokeWidth={2.5}
+   501→                        fill="url(#hz-owner-area)"
+   502→                        dot={false}
+   503→                        activeDot={{
+   504→                          r: 5,
+   505→                          strokeWidth: 2,
+   506→                          stroke: "var(--background)",
+   507→                          fill: "var(--chart-1)",
+   508→                        }}
+   509→                      />
+   510→                    </AreaChart>
+   511→                  </ResponsiveContainer>
+   512→                </div>
+   513→              </CardContent>
+   514→            </Card>
+   515→
+   516→            {/* پرمرجوع‌ترین کالاها */}
+   517→            <Card className="group transition-all duration-300 hover:-translate-y-0.5 hover:border-primary/30 hover:shadow-lg">
+   518→              <CardHeader>
+   519→                <CardTitle className="flex items-center gap-2 text-base">
+   520→                  <BarChart3 className="size-4 text-primary" />
+   521→                  پرمرجوع‌ترین کالاها
+   522→                </CardTitle>
+   523→                <CardDescription>بر اساس مجموع تعداد مرجوع‌شده از هر کالا</CardDescription>
+   524→              </CardHeader>
+   525→              <CardContent>
+   526→                {topProducts.length === 0 ? (
+   527→                  <div className="flex h-64 flex-col items-center justify-center gap-3 text-center">
+   528→                    <PistachioMotif size={64} className="opacity-60" />
+   529→                    <p className="text-sm text-muted-foreground">هنوز کالایی مرجوع نشده است</p>
+   530→                  </div>
+   531→                ) : (
+   532→                  <div dir="ltr" className="h-64 w-full">
+   533→                    <ResponsiveContainer width="100%" height="100%">
+   534→                      <BarChart
+   535→                        data={topProducts}
+   536→                        layout="vertical"
+   537→                        margin={{ top: 4, right: 12, bottom: 4, left: 12 }}
+   538→                      >
+   539→                        <XAxis
+   540→                          type="number"
+   541→                          reversed
+   542→                          hide
+   543→                          domain={[0, (dataMax: number) => Math.ceil(dataMax * 1.25) || 1]}
+   544→                        />
+   545→                        <YAxis
+   546→                          type="category"
+   547→                          dataKey="name"
+   548→                          orientation="right"
+   549→                          width={172}
+   550→                          tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
+   551→                          tickFormatter={(v: string) => truncateName(v)}
+   552→                          axisLine={false}
+   553→                          tickLine={false}
+   554→                        />
+   555→                        <Tooltip content={<BarTooltip />} cursor={{ fill: "var(--muted)", fillOpacity: 0.5 }} />
+   556→                        <Bar
+   557→                          dataKey="quantity"
+   558→                          name="تعداد"
+   559→                          fill="var(--chart-2)"
+   560→                          radius={[6, 0, 0, 6]}
+   561→                          maxBarSize={26}
+   562→                        >
+   563→                          <LabelList
+   564→                            dataKey="quantity"
+   565→                            position="left"
+   566→                            formatter={(v: unknown) => toFaDigits(Number(v))}
+   567→                            fill="var(--foreground)"
+   568→                            fontSize={11}
+   569→                          />
+   570→                        </Bar>
+   571→                      </BarChart>
+   572→                    </ResponsiveContainer>
+   573→                  </div>
+   574→                )}
+   575→              </CardContent>
+   576→            </Card>
+   577→          </motion.div>
+   578→
+   579→          {/* عملکرد صندوقدارها + مرجوعی‌های اخیر + هشدار موجودی */}
+   580→          <motion.div
+   581→            initial={{ opacity: 0, y: 20 }}
+   582→            animate={{ opacity: 1, y: 0 }}
+   583→            transition={{ duration: 0.5, delay: 0.25, ease: "easeOut" }}
+   584→            className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3"
+   585→          >
+   586→            <Card>
+   587→              <CardHeader>
+   588→                <CardTitle className="flex items-center gap-2 text-base">
+   589→                  <Users className="size-4 text-primary" />
+   590→                  عملکرد صندوقدارها
+   591→                  <Badge variant="secondary" className="num mr-auto text-[10px]">
+   592→                    {toFaDigits(sortedCashiers.filter((c) => c.isActive).length)} فعال از{" "}
+   593→                    {toFaDigits(sortedCashiers.length)}
+   594→                  </Badge>
+   595→                </CardTitle>
+   596→                <CardDescription>
+   597→                  مرتب‌شده بر اساس تعداد مرجوعی ثبت‌شده (نزولی) — میله نسبت به صندوقدار برتر
+   598→                </CardDescription>
+   599→              </CardHeader>
+   600→              <CardContent>
+   601→                {sortedCashiers.length === 0 ? (
+   602→                  <div className="flex flex-col items-center gap-3 py-8 text-center">
+   603→                    <PistachioMotif size={56} className="opacity-60" />
+   604→                    <p className="text-sm text-muted-foreground">صندوقداری ثبت نشده است</p>
+   605→                  </div>
+   606→                ) : (
+   607→                  <ul className="max-h-80 space-y-2.5 overflow-y-auto pl-1">
+   608→                    {sortedCashiers.map((c, i) => {
+   609→                      const maxCount = sortedCashiers[0]?.returnCount || 1;
+   610→                      const pct = Math.min(100, Math.round((c.returnCount / maxCount) * 100));
+   611→                      const rank = i === 0 ? "gold" : i === 1 ? "silver" : i === 2 ? "bronze" : null;
+   612→                      return (
+   613→                        <motion.li
+   614→                          key={c.id}
+   615→                          initial={{ opacity: 0, x: 14 }}
+   616→                          animate={{ opacity: 1, x: 0 }}
+   617→                          transition={{ duration: 0.35, delay: i * 0.05, ease: "easeOut" }}
+   618→                          className="group rounded-xl border bg-muted/30 px-4 py-3 transition-colors hover:border-primary/30 hover:bg-accent/40"
+   619→                        >
+   620→                          <div className="flex items-center justify-between gap-3">
+   621→                            <div className="flex min-w-0 items-center gap-3">
+   622→                              <span
+   623→                                className={cn(
+   624→                                  "num flex size-9 shrink-0 items-center justify-center rounded-full border text-sm font-extrabold",
+   625→                                  rank === "gold" &&
+   626→                                    "border-amber-400/50 bg-amber-400/15 text-amber-500 shadow-[0_0_12px] shadow-amber-400/20",
+   627→                                  rank === "silver" &&
+   628→                                    "border-slate-400/50 bg-slate-400/15 text-slate-400",
+   629→                                  rank === "bronze" &&
+   630→                                    "border-orange-700/40 bg-orange-700/10 text-orange-700 dark:text-orange-400",
+   631→                                  !rank && "bg-primary/10 text-primary"
+   632→                                )}
+   633→                              >
+   634→                                {toFaDigits(i + 1)}
+   635→                              </span>
+   636→                              <div className="min-w-0">
+   637→                                <p className="flex items-center gap-2 truncate text-sm font-semibold">
+   638→                                  {c.fullName}
+   639→                                  {!c.isActive && (
+   640→                                    <span className="text-[10px] font-medium text-muted-foreground">
+   641→                                      (غیرفعال)
+   642→                                    </span>
+   643→                                  )}
+   644→                                </p>
+   645→                                <p className="num text-[11px] text-muted-foreground">
+   646→                                  {toFaDigits(c.returnCount)} مرجوعی ·{" "}
+   647→                                  {formatMoney(c.totalAmount)} ریال
+   648→                                </p>
+   649→                              </div>
+   650→                            </div>
+   651→                            <div className="flex shrink-0 flex-col items-end gap-1">
+   652→                              {c.isActive ? (
+   653→                                <Badge className="border-primary/30 bg-primary/15 text-primary">
+   654→                                  فعال
+   655→                                </Badge>
+   656→                              ) : (
+   657→                                <Badge variant="secondary" className="text-muted-foreground">
+   658→                                  غیرفعال
+   659→                                </Badge>
+   660→                              )}
+   661→                              {c.lastActivityAt && (
+   662→                                <span className="num text-[10px] text-muted-foreground">
+   663→                                  آخرین: {formatJalaliDateTime(new Date(c.lastActivityAt))}
+   664→                                </span>
+   665→                              )}
+   666→                            </div>
+   667→                          </div>
+   668→                          {/* میله عملکرد نسبی */}
+   669→                          <div className="mt-2.5 h-1.5 overflow-hidden rounded-full bg-muted">
+   670→                            <motion.div
+   671→                              initial={{ width: 0 }}
+   672→                              animate={{ width: `${pct}%` }}
+   673→                              transition={{ duration: 0.7, delay: 0.2 + i * 0.07, ease: "easeOut" }}
+   674→                              className={cn(
+   675→                                "h-full rounded-full",
+   676→                                rank === "gold" && "bg-gradient-to-l from-amber-400 to-amber-500/70",
+   677→                                rank === "silver" && "bg-gradient-to-l from-slate-400 to-slate-500/70",
+   678→                                rank === "bronze" &&
+   679→                                  "bg-gradient-to-l from-orange-600 to-orange-700/70",
+   680→                                !rank && "bg-gradient-to-l from-primary to-primary/60"
+   681→                              )}
+   682→                            />
+   683→                          </div>
+   684→                        </motion.li>
+   685→                      );
+   686→                    })}
+   687→                  </ul>
+   688→                )}
+   689→              </CardContent>
+   690→            </Card>
+   691→
+   692→            <Card>
+   693→              <CardHeader>
+   694→                <CardTitle className="flex items-center gap-2 text-base">
+   695→                  <History className="size-4 text-primary" />
+   696→                  مرجوعی‌های اخیر
+   697→                </CardTitle>
+   698→                <CardDescription>۵ مورد آخر ثبت‌شده در سامانه</CardDescription>
+   699→              </CardHeader>
+   700→              <CardContent>
+   701→                {stats.recentReturns.length === 0 ? (
+   702→                  <div className="flex flex-col items-center gap-3 py-8 text-center">
+   703→                    <PistachioMotif size={56} className="opacity-60" />
+   704→                    <p className="text-sm text-muted-foreground">هنوز مرجوعی‌ای ثبت نشده است</p>
+   705→                  </div>
+   706→                ) : (
+   707→                  <ul className="max-h-72 space-y-2 overflow-y-auto pl-1">
+   708→                    {stats.recentReturns.map((r, i) => (
+   709→                      <motion.li
+   710→                        key={r.id}
+   711→                        initial={{ opacity: 0, x: -14 }}
+   712→                        animate={{ opacity: 1, x: 0 }}
+   713→                        transition={{ duration: 0.35, delay: i * 0.05, ease: "easeOut" }}
+   714→                        className="rounded-xl border bg-muted/30 px-4 py-2.5 transition-colors hover:border-primary/30 hover:bg-accent/40"
+   715→                      >
+   716→                        <div className="flex items-center justify-between gap-2">
+   717→                          <span dir="ltr" className="num text-xs font-bold text-primary">
+   718→                            {r.code}
+   719→                          </span>
+   720→                          {r.status === "pending" ? (
+   721→                            <Badge className="border-chart-2/30 bg-chart-2/15 text-chart-2 hover:bg-chart-2/20">
+   722→                              <Hourglass className="size-3" />
+   723→                              در انتظار
+   724→                            </Badge>
+   725→                          ) : (
+   726→                            <Badge className="border-primary/30 bg-primary/15 text-primary hover:bg-primary/20">
+   727→                              <CheckCircle2 className="size-3" />
+   728→                              پرداخت شد
+   729→                            </Badge>
+   730→                          )}
+   731→                        </div>
+   732→                        <div className="mt-1.5 flex items-center justify-between gap-2">
+   733→                          <p className="truncate text-sm font-semibold">{r.customerName}</p>
+   734→                          <p className="num whitespace-nowrap text-sm font-bold">
+   735→                            {formatMoney(r.totalAmount)}
+   736→                            <span className="mr-1 text-[10px] font-medium text-muted-foreground">ریال</span>
+   737→                          </p>
+   738→                        </div>
+   739→                        <div className="mt-1 flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+   740→                          <span className="flex min-w-0 items-center gap-1">
+   741→                            <UserRound className="size-3 shrink-0" />
+   742→                            <span className="truncate">{r.cashierName}</span>
+   743→                          </span>
+   744→                          <span className="num whitespace-nowrap">
+   745→                            {formatJalaliDateTime(new Date(r.submittedAt))}
+   746→                          </span>
+   747→                        </div>
+   748→                      </motion.li>
+   749→                    ))}
+   750→                  </ul>
+   751→                )}
+   752→              </CardContent>
+   753→            </Card>
+   754→
+   755→            {/* هشدار موجودی بانک کالا (هلو) */}
+   756→            <Card>
+   757→              <CardHeader>
+   758→                <CardTitle className="flex items-center gap-2 text-base">
+   759→                  <TriangleAlert className="size-4 text-chart-2" />
+   760→                  هشدار موجودی بانک کالا
+   761→                  {stats.lowStock.total === 0 ? (
+   762→                    <Badge variant="outline" className="mr-auto text-[10px]">
+   763→                      بدون هشدار
+   764→                    </Badge>
+   765→                  ) : (
+   766→                    <Badge variant="secondary" className="num mr-auto text-[10px]">
+   767→                      {toFaDigits(stats.lowStock.total)} کالا
+   768→                    </Badge>
+   769→                  )}
+   770→                </CardTitle>
+   771→                <CardDescription>
+   772→                  کالاهای دارای ۵ عدد یا کمتر موجودی — بر اساس آخرین بروزرسانی بانک کالا (هلو)
+   773→                </CardDescription>
+   774→              </CardHeader>
+   775→              <CardContent>
+   776→                {stats.lowStock.total === 0 ? (
+   777→                  <div className="flex flex-col items-center gap-3 py-8 text-center">
+   778→                    <PistachioMotif size={56} className="opacity-60" />
+   779→                    <p className="flex items-center gap-1.5 text-sm font-semibold text-primary">
+   780→                      <PackageCheck className="size-4" />
+   781→                      همه کالاها موجودی کافی دارند
+   782→                    </p>
+   783→                  </div>
+   784→                ) : (
+   785→                  <>
+   786→                    <div className="flex flex-wrap gap-2">
+   787→                      {stats.lowStock.outOfStock > 0 && (
+   788→                        <span className="num rounded-full border border-destructive/30 bg-destructive/10 px-3 py-1 text-[11px] font-bold text-destructive">
+   789→                          {toFaDigits(stats.lowStock.outOfStock)} کالای تمام‌شده
+   790→                        </span>
+   791→                      )}
+   792→                      <span className="num rounded-full border border-chart-2/30 bg-chart-2/10 px-3 py-1 text-[11px] font-bold text-chart-2">
+   793→                        {toFaDigits(stats.lowStock.total)} کالا با موجودی کم
+   794→                      </span>
+   795→                    </div>
+   796→                    <ul className="mt-3 max-h-64 space-y-2 overflow-y-auto pl-1">
+   797→                      {stats.lowStock.products.map((p, i) => (
+   798→                        <motion.li
+   799→                          key={p.id}
+   800→                          initial={{ opacity: 0, x: 14 }}
+   801→                          animate={{ opacity: 1, x: 0 }}
+   802→                          transition={{ duration: 0.35, delay: i * 0.05, ease: "easeOut" }}
+   803→                          className="group rounded-xl border bg-muted/30 px-3.5 py-2.5 transition-colors hover:border-chart-2/40 hover:bg-accent/40"
+   804→                        >
+   805→                          <div className="flex items-center justify-between gap-2">
+   806→                            <div className="flex min-w-0 flex-1 flex-col gap-1">
+   807→                              <p className="truncate text-sm font-semibold">{p.name}</p>
+   808→                              {p.code && (
+   809→                                <Badge variant="outline" className="num w-fit px-1.5 py-0 text-[10px]">
+   810→                                  کد: {toFaDigits(p.code)}
+   811→                                </Badge>
+   812→                              )}
+   813→                            </div>
+   814→                            {p.stock === 0 ? (
+   815→                              <Badge className="shrink-0 border-destructive/40 bg-destructive/15 text-destructive hover:bg-destructive/20">
+   816→                                ناموجود
+   817→                              </Badge>
+   818→                            ) : (
+   819→                              <Badge className="num shrink-0 border-chart-2/40 bg-chart-2/15 text-chart-2 hover:bg-chart-2/20">
+   820→                                {toFaDigits(p.stock)} {p.unit}
+   821→                              </Badge>
+   822→                            )}
+   823→                          </div>
+   824→                        </motion.li>
+   825→                      ))}
+   826→                    </ul>
+   827→                  </>
+   828→                )}
+   829→                <p className="num mt-3 text-[10px] text-muted-foreground">
+   830→                  {stats.lowStock.bankUpdatedAt
+   831→                    ? `آخرین به‌روزرسانی بانک کالا: ${formatJalaliDateTime(
+   832→                        new Date(stats.lowStock.bankUpdatedAt)
+   833→                      )}`
+   834→                    : "بروزرسانی بانک کالا: نامشخص"}
+   835→                </p>
+   836→              </CardContent>
+   837→            </Card>
+   838→          </motion.div>
+   839→        </>
+   840→      ) : null}
+   841→    </section>
+   842→  );
+   843→}
+   844→

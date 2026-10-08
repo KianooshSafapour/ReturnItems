@@ -1,0 +1,1113 @@
+     1→"use client";
+     2→
+     3→// فهرست مرجوعی‌ها + پنجره جزئیات + فرم پرداخت مدیریت — سازگار با مدل تسویه (تبادل/کسری/بدهی)
+     4→import { useCallback, useEffect, useMemo, useState } from "react";
+     5→import { Button } from "@/components/ui/button";
+     6→import { Input } from "@/components/ui/input";
+     7→import { Badge } from "@/components/ui/badge";
+     8→import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+     9→import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+    10→import { Skeleton } from "@/components/ui/skeleton";
+    11→import { toast } from "sonner";
+    12→import { motion } from "framer-motion";
+    13→import {
+    14→  Search, FileText, ChevronLeft, ChevronRight, Loader2, Landmark,
+    15→  Wallet, CalendarClock, UserRound, Phone, CreditCard, Hash, Package,
+    16→  Hourglass, CheckCircle2, Download, ReceiptText,
+    17→  Repeat2, Info, TriangleAlert, Barcode, MessageSquareText, CalendarDays, X, FileDown,
+    18→} from "lucide-react";
+    19→import { MoneyDisplay } from "./money-input";
+    20→import { JalaliDateTimePicker } from "./jalali-datetime-picker";
+    21→import { IlluminatedDivider, PistachioMotif } from "./ornaments";
+    22→import { formatMoney, formatCardNumber, toFaDigits, toEnDigits, moneyWords } from "@/lib/money";
+    23→import { cn } from "@/lib/utils";
+    24→import {
+    25→  formatJalaliDateTime, formatJalaliFull, toJalali, jalaliToDate,
+    26→  jalaliMonthLength, JALALI_MONTHS,
+    27→} from "@/lib/jalali";
+    28→import { BANKS, digitsOnly } from "@/lib/validators";
+    29→import { SETTLEMENT_META, isManagerRole } from "./types";
+    30→import { ReceiptDialog } from "./receipt-dialog";
+    31→import type { ReturnDetailDTO, ReturnListRow, SessionUser, SettlementType } from "./types";
+    32→
+    33→interface HistoryProps {
+    34→  user: SessionUser;
+    35→  statusFilter?: "pending" | "paid" | "all";
+    36→  onChanged?: () => void;
+    37→  compact?: boolean;
+    38→  title?: string;
+    39→}
+    40→
+    41→interface MonthOption {
+    42→  key: string; // "jy-jm" مثل "1405-7"
+    43→  jy: number;
+    44→  jm: number;
+    45→  label: string; // «مهر ۱۴۰۵»
+    46→}
+    47→
+    48→/** برچسب ماه شمسی: «مهر ۱۴۰۵» */
+    49→function jalaliMonthLabel(jy: number, jm: number): string {
+    50→  return `${JALALI_MONTHS[jm - 1] ?? ""} ${toFaDigits(jy)}`;
+    51→}
+    52→
+    53→/** n ماه اخیر جلالی، از ماه جاری به عقب */
+    54→function lastJalaliMonths(n: number): MonthOption[] {
+    55→  const now = toJalali(new Date());
+    56→  const opts: MonthOption[] = [];
+    57→  let jy = now.jy;
+    58→  let jm = now.jm;
+    59→  for (let i = 0; i < n; i += 1) {
+    60→    opts.push({ key: `${jy}-${jm}`, jy, jm, label: jalaliMonthLabel(jy, jm) });
+    61→    jm -= 1;
+    62→    if (jm === 0) {
+    63→      jm = 12;
+    64→      jy -= 1;
+    65→    }
+    66→  }
+    67→  return opts;
+    68→}
+    69→
+    70→export function ReturnHistory({ user, statusFilter = "all", onChanged, compact, title }: HistoryProps) {
+    71→  const [status, setStatus] = useState<string>(statusFilter);
+    72→  const [q, setQ] = useState("");
+    73→  const [page, setPage] = useState(1);
+    74→  const [loading, setLoading] = useState(true);
+    75→  const [rows, setRows] = useState<ReturnListRow[]>([]);
+    76→  const [total, setTotal] = useState(0);
+    77→  const [detailId, setDetailId] = useState<string | null>(null);
+    78→  const pageSize = compact ? 8 : 20;
+    79→
+    80→  // ---- فیلتر ماه شمسی + میان‌بُر بازه زمانی ----
+    81→  const [monthKey, setMonthKey] = useState<string>("all"); // "all" | "jy-jm"
+    82→  const [quickRange, setQuickRange] = useState<"all" | "7" | "30">("all");
+    83→
+    84→  const baseMonths = useMemo(() => lastJalaliMonths(12), []);
+    85→  // گزینه‌های ماه = ۱۲ ماه اخیر ∪ ماه‌های موجود در داده‌های واکشی‌شده (مثل آرشیو قدیمی‌تر)
+    86→  const monthOptions = useMemo<MonthOption[]>(() => {
+    87→    const map = new Map<string, MonthOption>();
+    88→    for (const m of baseMonths) map.set(m.key, m);
+    89→    for (const r of rows) {
+    90→      const d = new Date(r.submittedAt);
+    91→      if (isNaN(d.getTime())) continue;
+    92→      const j = toJalali(d);
+    93→      const key = `${j.jy}-${j.jm}`;
+    94→      if (!map.has(key))
+    95→        map.set(key, { key, jy: j.jy, jm: j.jm, label: jalaliMonthLabel(j.jy, j.jm) });
+    96→    }
+    97→    return Array.from(map.values()).sort((a, b) => b.jy - a.jy || b.jm - a.jm);
+    98→  }, [baseMonths, rows]);
+    99→
+   100→  // تبدیل فیلتر فعال به from/to برای API — ماه: کل ماه شمسی؛ میان‌بُر: N×۲۴ ساعت اخیر
+   101→  const rangeParams = useMemo<{ from: string; to: string } | null>(() => {
+   102→    if (monthKey !== "all") {
+   103→      const [jys, jms] = monthKey.split("-");
+   104→      const jy = parseInt(jys, 10);
+   105→      const jm = parseInt(jms, 10);
+   106→      if (!jy || !jm || jm < 1 || jm > 12) return null;
+   107→      const from = jalaliToDate(jy, jm, 1);
+   108→      const to = jalaliToDate(jy, jm, jalaliMonthLength(jy, jm));
+   109→      to.setHours(23, 59, 59, 999);
+   110→      return { from: from.toISOString(), to: to.toISOString() };
+   111→    }
+   112→    if (quickRange === "7" || quickRange === "30") {
+   113→      const to = new Date();
+   114→      const from = new Date(to.getTime() - parseInt(quickRange, 10) * 24 * 3600 * 1000);
+   115→      return { from: from.toISOString(), to: to.toISOString() };
+   116→    }
+   117→    return null;
+   118→  }, [monthKey, quickRange]);
+   119→
+   120→  const activeFilterLabel = (() => {
+   121→    if (monthKey !== "all") {
+   122→      const [jys, jms] = monthKey.split("-");
+   123→      const jy = parseInt(jys, 10);
+   124→      const jm = parseInt(jms, 10);
+   125→      if (jy && jm >= 1 && jm <= 12) return jalaliMonthLabel(jy, jm);
+   126→      return "فیلتر ماه";
+   127→    }
+   128→    if (quickRange === "7") return "۷ روز اخیر";
+   129→    if (quickRange === "30") return "۳۰ روز اخیر";
+   130→    return null;
+   131→  })();
+   132→
+   133→  const load = useCallback(async () => {
+   134→    setLoading(true);
+   135→    try {
+   136→      const params = new URLSearchParams({
+   137→        status: status === "all" ? "all" : status,
+   138→        page: String(page),
+   139→        pageSize: String(pageSize),
+   140→      });
+   141→      if (q.trim()) params.set("q", q.trim());
+   142→      if (rangeParams) {
+   143→        params.set("from", rangeParams.from);
+   144→        params.set("to", rangeParams.to);
+   145→      }
+   146→      const res = await fetch(`/api/returns?${params}`);
+   147→      const data = await res.json();
+   148→      if (res.ok) {
+   149→        setRows(data.returns ?? []);
+   150→        setTotal(data.total ?? 0);
+   151→      }
+   152→    } catch {
+   153→      toast.error("خطا در دریافت فهرست مرجوعی‌ها");
+   154→    } finally {
+   155→      setLoading(false);
+   156→    }
+   157→  }, [status, q, page, pageSize, rangeParams]);
+   158→
+   159→  useEffect(() => {
+   160→    const t = setTimeout(load, 200);
+   161→    return () => clearTimeout(t);
+   162→  }, [load]);
+   163→
+   164→  const pages = Math.max(1, Math.ceil(total / pageSize));
+   165→
+   166→  // انتخاب ماه — میان‌بُر روزها را خاموش می‌کند (هر دو هم‌زمان فعال نمی‌شوند)
+   167→  function selectMonth(v: string) {
+   168→    setMonthKey(v);
+   169→    if (v !== "all") setQuickRange("all");
+   170→    setPage(1);
+   171→  }
+   172→
+   173→  function selectQuickRange(v: "all" | "7" | "30") {
+   174→    setQuickRange(v);
+   175→    if (v !== "all") setMonthKey("all");
+   176→    setPage(1);
+   177→  }
+   178→
+   179→  function clearDateFilter() {
+   180→    setMonthKey("all");
+   181→    setQuickRange("all");
+   182→    setPage(1);
+   183→  }
+   184→
+   185→  return (
+   186→    <div className="space-y-4">
+   187→      {title && (
+   188→        <div className="flex items-center gap-2">
+   189→          <FileText className="size-5 text-primary" />
+   190→          <h2 className="font-extrabold text-lg">{title}</h2>
+   191→        </div>
+   192→      )}
+   193→
+   194→      {/* فیلترها */}
+   195→      <div className="flex flex-col gap-3">
+   196→        <div className="flex flex-col sm:flex-row gap-3">
+   197→          <div className="relative flex-1">
+   198→            <Search className="absolute right-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+   199→            <Input
+   200→              placeholder="جستجو: شماره پیگیری، نام مشتری، موبایل یا نام کالا…"
+   201→              className="pr-10 h-11"
+   202→              value={q}
+   203→              onChange={(e) => {
+   204→                setQ(e.target.value);
+   205→                setPage(1);
+   206→              }}
+   207→            />
+   208→          </div>
+   209→          <Select
+   210→            value={status}
+   211→            onValueChange={(v) => {
+   212→              setStatus(v);
+   213→              setPage(1);
+   214→            }}
+   215→          >
+   216→            <SelectTrigger className="h-11! w-full sm:w-44">
+   217→              <SelectValue />
+   218→            </SelectTrigger>
+   219→            <SelectContent>
+   220→              <SelectItem value="all">همه وضعیت‌ها</SelectItem>
+   221→              <SelectItem value="pending">در انتظار پرداخت</SelectItem>
+   222→              <SelectItem value="paid">پرداخت شده</SelectItem>
+   223→            </SelectContent>
+   224→          </Select>
+   225→        </div>
+   226→
+   227→        {/* فیلتر ماه شمسی + میان‌بُرهای بازه زمانی */}
+   228→        <div className="flex flex-wrap items-center gap-2">
+   229→          <Select value={monthKey} onValueChange={selectMonth}>
+   230→            <SelectTrigger className="h-11! w-full sm:w-44" aria-label="فیلتر ماه (تقویم شمسی)">
+   231→              <CalendarDays className="size-4 text-muted-foreground" />
+   232→              <SelectValue placeholder="همه ماه‌ها" />
+   233→            </SelectTrigger>
+   234→            <SelectContent className="max-h-72">
+   235→              <SelectItem value="all">همه ماه‌ها</SelectItem>
+   236→              {monthOptions.map((m) => (
+   237→                <SelectItem key={m.key} value={m.key}>
+   238→                  {m.label}
+   239→                </SelectItem>
+   240→              ))}
+   241→            </SelectContent>
+   242→          </Select>
+   243→
+   244→          <div className="flex flex-wrap items-center gap-2" role="group" aria-label="بازه زمانی سریع">
+   245→            {(
+   246→              [
+   247→                { v: "7", label: "۷ روز اخیر" },
+   248→                { v: "30", label: "۳۰ روز اخیر" },
+   249→                { v: "all", label: "همه" },
+   250→              ] as const
+   251→            ).map(({ v, label }) => (
+   252→              <Button
+   253→                key={v}
+   254→                type="button"
+   255→                variant={quickRange === v ? "default" : "outline"}
+   256→                className="h-11 px-4 font-semibold"
+   257→                aria-pressed={quickRange === v}
+   258→                onClick={() => selectQuickRange(v)}
+   259→              >
+   260→                {label}
+   261→              </Button>
+   262→            ))}
+   263→          </div>
+   264→
+   265→          {activeFilterLabel && (
+   266→            <Badge className="bg-primary/15 text-primary border-primary/30 hover:bg-primary/20 gap-1.5 h-9 px-3">
+   267→              <CalendarDays className="size-3.5" />
+   268→              <span className="font-bold">{activeFilterLabel}</span>
+   269→              <button
+   270→                type="button"
+   271→                onClick={clearDateFilter}
+   272→                aria-label="حذف فیلتر زمانی"
+   273→                className="inline-flex items-center justify-center size-7 rounded-full hover:bg-primary/20 transition-colors cursor-pointer"
+   274→              >
+   275→                <X className="size-4" />
+   276→              </button>
+   277→            </Badge>
+   278→          )}
+   279→        </div>
+   280→      </div>
+   281→
+   282→      {/* جدول */}
+   283→      <div className="rounded-2xl border bg-card overflow-hidden">
+   284→        <div className="overflow-x-auto">
+   285→          <div className="max-h-[70vh] overflow-y-auto">
+   286→            <table className="w-full text-sm min-w-[640px]">
+   287→              <thead className="sticky top-0 z-10 bg-muted/95 backdrop-blur border-b">
+   288→                <tr className="text-muted-foreground text-xs">
+   289→                  <th className="text-start font-semibold px-4 py-3">شماره پیگیری</th>
+   290→                  <th className="text-start font-semibold px-4 py-3">مشتری</th>
+   291→                  <th className="text-start font-semibold px-4 py-3">مبلغ قابل انتقال</th>
+   292→                  <th className="text-start font-semibold px-4 py-3">اقلام</th>
+   293→                  {isManagerRole(user.role) && (
+   294→                    <th className="text-start font-semibold px-4 py-3">صندوقدار</th>
+   295→                  )}
+   296→                  <th className="text-start font-semibold px-4 py-3">زمان ثبت</th>
+   297→                  <th className="text-start font-semibold px-4 py-3">وضعیت</th>
+   298→                  <th className="text-start font-semibold px-4 py-3">جزئیات</th>
+   299→                </tr>
+   300→              </thead>
+   301→              <tbody>
+   302→                {loading ? (
+   303→                  Array.from({ length: 5 }).map((_, i) => (
+   304→                    <tr key={i} className="border-b last:border-0">
+   305→                      <td colSpan={8} className="px-4 py-3">
+   306→                        <Skeleton className="h-6 w-full" />
+   307→                      </td>
+   308→                    </tr>
+   309→                  ))
+   310→                ) : rows.length === 0 ? (
+   311→                  <tr>
+   312→                    <td colSpan={8} className="py-12">
+   313→                      <div className="text-center text-muted-foreground">
+   314→                        <PistachioMotif size={52} className="mx-auto mb-3 opacity-60" />
+   315→                        <p className="text-sm">مرجوعی‌ای یافت نشد</p>
+   316→                      </div>
+   317→                    </td>
+   318→                  </tr>
+   319→                ) : (
+   320→                  rows.map((r, i) => (
+   321→                    <motion.tr
+   322→                      key={r.id}
+   323→                      initial={{ opacity: 0 }}
+   324→                      animate={{ opacity: 1 }}
+   325→                      transition={{ delay: i * 0.03 }}
+   326→                      className="border-b last:border-0 hover:bg-accent/40 transition-colors cursor-pointer"
+   327→                      onClick={() => setDetailId(r.id)}
+   328→                    >
+   329→                      <td className="px-4 py-3">
+   330→                        <span className="num font-bold text-primary" dir="ltr">
+   331→                          {r.code}
+   332→                        </span>
+   333→                      </td>
+   334→                      <td className="px-4 py-3">
+   335→                        <p className="font-semibold">{r.customerName}</p>
+   336→                        <p className="num text-xs text-muted-foreground" dir="ltr">
+   337→                          {toFaDigits(r.customerPhone)}
+   338→                        </p>
+   339→                      </td>
+   340→                      <td className="px-4 py-3">
+   341→                        {/* مبلغ قابل انتقال = مبلغ تسویه (اقلام − کالای جایگزین) */}
+   342→                        <div className="space-y-1 min-w-0">
+   343→                          <p className="num font-bold">{formatMoney(r.transferAmount)}</p>
+   344→                          <p className="num text-[10px] text-muted-foreground">
+   345→                            {formatMoney(Math.floor(r.transferAmount / 10))} تومان
+   346→                          </p>
+   347→                          {r.transferAmount !== r.totalAmount && (
+   348→                            <>
+   349→                              <p className="num text-[10px] text-muted-foreground">
+   350→                                جمع اقلام: {formatMoney(r.totalAmount)} ریال
+   351→                              </p>
+   352→                              {r.settlementType !== "full" && (
+   353→                                <SettlementBadge type={r.settlementType} />
+   354→                              )}
+   355→                            </>
+   356→                          )}
+   357→                        </div>
+   358→                      </td>
+   359→                      <td className="px-4 py-3 num">{toFaDigits(r.itemCount)} قلم</td>
+   360→                      {isManagerRole(user.role) && (
+   361→                        <td className="px-4 py-3 text-muted-foreground">{r.cashierName}</td>
+   362→                      )}
+   363→                      <td className="px-4 py-3 num text-xs text-muted-foreground whitespace-nowrap">
+   364→                        {formatJalaliDateTime(new Date(r.submittedAt))}
+   365→                      </td>
+   366→                      <td className="px-4 py-3">
+   367→                        {r.status === "pending" ? (
+   368→                          <Badge className="bg-chart-2/15 text-chart-2 border-chart-2/30 hover:bg-chart-2/20 gap-1">
+   369→                            <Hourglass className="size-3" />
+   370→                            در انتظار
+   371→                          </Badge>
+   372→                        ) : (
+   373→                          <Badge className="bg-primary/15 text-primary border-primary/30 hover:bg-primary/20 gap-1">
+   374→                            <CheckCircle2 className="size-3" />
+   375→                            پرداخت شد
+   376→                          </Badge>
+   377→                        )}
+   378→                      </td>
+   379→                      <td className="px-4 py-3">
+   380→                        <Button variant="ghost" size="sm" className="h-8">
+   381→                          <ReceiptText className="size-4 ml-1" />
+   382→                          مشاهده
+   383→                        </Button>
+   384→                      </td>
+   385→                    </motion.tr>
+   386→                  ))
+   387→                )}
+   388→              </tbody>
+   389→            </table>
+   390→          </div>
+   391→        </div>
+   392→
+   393→        {/* صفحه‌بندی */}
+   394→        {total > pageSize && (
+   395→          <div className="flex items-center justify-between px-4 py-3 border-t bg-muted/30">
+   396→            <p className="num text-xs text-muted-foreground">
+   397→              نمایش {toFaDigits((page - 1) * pageSize + 1)} تا{" "}
+   398→              {toFaDigits(Math.min(page * pageSize, total))} از {toFaDigits(total)} مورد
+   399→            </p>
+   400→            <div className="flex items-center gap-1.5">
+   401→              <Button
+   402→                variant="outline"
+   403→                size="icon"
+   404→                className="size-8"
+   405→                disabled={page <= 1}
+   406→                onClick={() => setPage((p) => p - 1)}
+   407→                aria-label="صفحه قبل"
+   408→              >
+   409→                <ChevronRight className="size-4" />
+   410→              </Button>
+   411→              <span className="num text-sm font-bold px-2">
+   412→                {toFaDigits(page)} / {toFaDigits(pages)}
+   413→              </span>
+   414→              <Button
+   415→                variant="outline"
+   416→                size="icon"
+   417→                className="size-8"
+   418→                disabled={page >= pages}
+   419→                onClick={() => setPage((p) => p + 1)}
+   420→                aria-label="صفحه بعد"
+   421→              >
+   422→                <ChevronLeft className="size-4" />
+   423→              </Button>
+   424→            </div>
+   425→          </div>
+   426→        )}
+   427→      </div>
+   428→
+   429→      {/* پنجره جزئیات */}
+   430→      <ReturnDetailDialog
+   431→        id={detailId}
+   432→        onClose={() => setDetailId(null)}
+   433→        user={user}
+   434→        onPaid={() => {
+   435→          load();
+   436→          onChanged?.();
+   437→        }}
+   438→      />
+   439→    </div>
+   440→  );
+   441→}
+   442→
+   443→// ---------- پنجره جزئیات مرجوعی ----------
+   444→export function ReturnDetailDialog({
+   445→  id,
+   446→  onClose,
+   447→  user,
+   448→  onPaid,
+   449→}: {
+   450→  id: string | null;
+   451→  onClose: () => void;
+   452→  user: SessionUser;
+   453→  onPaid?: () => void;
+   454→}) {
+   455→  // الگوی استخراج حالت: بارگذاری از مقایسهٔ شناسهٔ درخواستی با دادهٔ واکشی‌شده به‌دست می‌آید
+   456→  const [fetched, setFetched] = useState<{ id: string; data: ReturnDetailDTO | null } | null>(null);
+   457→  const [receiptOpen, setReceiptOpen] = useState(false);
+   458→  const current = fetched && fetched.id === id ? fetched : null;
+   459→  const loading = !!id && !current;
+   460→  const detail = current?.data ?? null;
+   461→
+   462→  useEffect(() => {
+   463→    if (!id) return;
+   464→    let cancelled = false;
+   465→    fetch(`/api/returns/${id}`)
+   466→      .then((r) => r.json())
+   467→      .then((d) => {
+   468→        if (cancelled) return;
+   469→        if (d.id) setFetched({ id, data: d });
+   470→        else {
+   471→          setFetched({ id, data: null });
+   472→          toast.error(d.error || "خطا در دریافت جزئیات");
+   473→        }
+   474→      })
+   475→      .catch(() => {
+   476→        if (!cancelled) {
+   477→          setFetched({ id, data: null });
+   478→          toast.error("خطا در دریافت جزئیات");
+   479→        }
+   480→      });
+   481→    return () => {
+   482→      cancelled = true;
+   483→    };
+   484→  }, [id]);
+   485→
+   486→  // پاک‌سازی جزئیات هنگام بستن پنجره (در رویداد، نه افکت)
+   487→  function handleClose() {
+   488→    setFetched(null);
+   489→    onClose();
+   490→  }
+   491→
+   492→  return (
+   493→    <>
+   494→    <Dialog open={!!id} onOpenChange={(o) => !o && handleClose()}>
+   495→      <DialogContent className="max-w-3xl max-h-[92vh] overflow-y-auto p-0" dir="rtl">
+   496→        {loading || !detail ? (
+   497→          <div className="p-10 flex flex-col items-center gap-4">
+   498→            <DialogHeader className="sr-only">
+   499→              <DialogTitle>جزئیات مرجوعی</DialogTitle>
+   500→              <DialogDescription>در حال دریافت جزئیات از سرور</DialogDescription>
+   501→            </DialogHeader>
+   502→            <Loader2 className="size-8 animate-spin text-primary" />
+   503→            <p className="text-sm text-muted-foreground">در حال دریافت جزئیات…</p>
+   504→          </div>
+   505→        ) : (
+   506→          <div>
+   507→            <DialogHeader className="px-6 pt-6 pb-0">
+   508→              <DialogTitle className="flex items-center gap-2 flex-wrap">
+   509→                <span className="num text-primary" dir="ltr">
+   510→                  {detail.code}
+   511→                </span>
+   512→                {detail.status === "pending" ? (
+   513→                  <Badge className="bg-chart-2/15 text-chart-2 border-chart-2/30 gap-1">
+   514→                    <Hourglass className="size-3" /> در انتظار پرداخت
+   515→                  </Badge>
+   516→                ) : (
+   517→                  <Badge className="bg-primary/15 text-primary border-primary/30 gap-1">
+   518→                    <CheckCircle2 className="size-3" /> پرداخت و بایگانی شد
+   519→                  </Badge>
+   520→                )}
+   521→              </DialogTitle>
+   522→              <DialogDescription className="sr-only">
+   523→                جزئیات کامل مرجوعی، اقلام و اطلاعات پرداخت — دکمه چاپ رسید در سربرگ
+   524→              </DialogDescription>
+   525→            </DialogHeader>
+   526→            <div className="px-6 pb-2 flex justify-end">
+   527→              <Button
+   528→                variant="outline"
+   529→                size="sm"
+   530→                className="gap-1.5 h-9"
+   531→                onClick={() => setReceiptOpen(true)}
+   532→              >
+   533→                <FileDown className="size-4 text-primary" />
+   534→                چاپ رسید مرجوعی
+   535→              </Button>
+   536→            </div>
+   537→
+   538→            <div className="p-6 space-y-6">
+   539→              {/* اطلاعات مشتری */}
+   540→              <section className="grid sm:grid-cols-2 gap-3 text-sm">
+   541→                <InfoRow icon={<UserRound className="size-4" />} label="مشتری" value={detail.customerName} />
+   542→                <InfoRow
+   543→                  icon={<Phone className="size-4" />}
+   544→                  label="موبایل"
+   545→                  value={toFaDigits(detail.customerPhone)}
+   546→                  ltr
+   547→                />
+   548→                <InfoRow
+   549→                  icon={<CreditCard className="size-4" />}
+   550→                  label="کارت بانکی مشتری"
+   551→                  value={formatCardNumber(detail.customerCardNumber)}
+   552→                  ltr
+   553→                />
+   554→                <InfoRow
+   555→                  icon={<CalendarClock className="size-4" />}
+   556→                  label="زمان خرید"
+   557→                  value={formatJalaliFull(new Date(detail.purchaseAt))}
+   558→                />
+   559→                <InfoRow icon={<UserRound className="size-4" />} label="صندوقدار" value={detail.cashier.fullName} />
+   560→                <InfoRow
+   561→                  icon={<CalendarClock className="size-4" />}
+   562→                  label="زمان ثبت"
+   563→                  value={formatJalaliFull(new Date(detail.submittedAt))}
+   564→                />
+   565→              </section>
+   566→
+   567→              {/* دلیل */}
+   568→              <section className="rounded-xl bg-muted/50 border p-4">
+   569→                <p className="text-xs text-muted-foreground mb-1.5">دلیل مرجوعی</p>
+   570→                <p className="font-semibold leading-7">{detail.reason}</p>
+   571→                {detail.note && (
+   572→                  <p className="text-sm text-muted-foreground leading-7 mt-2 border-t pt-2">
+   573→                    توضیحات: {detail.note}
+   574→                  </p>
+   575→                )}
+   576→              </section>
+   577→
+   578→              {/* اقلام */}
+   579→              <section>
+   580→                <div className="flex items-center gap-2 mb-3">
+   581→                  <Package className="size-4 text-primary" />
+   582→                  <h4 className="font-bold text-sm">اقلام مرجوعی</h4>
+   583→                  <Badge variant="outline" className="num">
+   584→                    {toFaDigits(detail.items.length)} قلم
+   585→                  </Badge>
+   586→                </div>
+   587→                <div className="rounded-xl border overflow-hidden">
+   588→                  <div className="overflow-x-auto">
+   589→                    <table className="w-full text-sm min-w-[520px]">
+   590→                      <thead className="bg-muted/70 border-b text-xs text-muted-foreground">
+   591→                        <tr>
+   592→                          <th className="text-start px-3 py-2.5 font-semibold">نام کالا</th>
+   593→                          <th className="text-start px-3 py-2.5 font-semibold">بارکد</th>
+   594→                          <th className="text-start px-3 py-2.5 font-semibold">تعداد</th>
+   595→                          <th className="text-start px-3 py-2.5 font-semibold">قیمت واحد</th>
+   596→                          <th className="text-start px-3 py-2.5 font-semibold">مبلغ کل</th>
+   597→                        </tr>
+   598→                      </thead>
+   599→                      <tbody>
+   600→                        {detail.items.map((it) => (
+   601→                          <tr key={it.id} className="border-b last:border-0">
+   602→                            <td className="px-3 py-2.5 font-semibold">
+   603→                              {it.name}
+   604→                              {it.code && (
+   605→                                <span className="block num text-[10px] text-muted-foreground">
+   606→                                  کد هلو: {toFaDigits(it.code)}
+   607→                                </span>
+   608→                              )}
+   609→                            </td>
+   610→                            <td className="px-3 py-2.5 text-xs text-muted-foreground" dir="ltr">
+   611→                              {it.barcode ? (
+   612→                                <span className="num inline-flex items-center gap-1.5">
+   613→                                  <Barcode className="size-3.5 shrink-0 opacity-70" />
+   614→                                  {toFaDigits(it.barcode)}
+   615→                                </span>
+   616→                              ) : (
+   617→                                "—"
+   618→                              )}
+   619→                            </td>
+   620→                            <td className="px-3 py-2.5 num">{toFaDigits(it.quantity)}</td>
+   621→                            <td className="px-3 py-2.5 num">{formatMoney(it.unitPrice)}</td>
+   622→                            <td className="px-3 py-2.5 num font-bold text-primary">
+   623→                              {formatMoney(it.lineTotal)}
+   624→                            </td>
+   625→                          </tr>
+   626→                        ))}
+   627→                      </tbody>
+   628→                      <tfoot className="bg-primary/5 border-t">
+   629→                        <tr>
+   630→                          <td colSpan={4} className="px-3 py-3 font-bold">
+   631→                            جمع کل اقلام:
+   632→                          </td>
+   633→                          <td className="px-3 py-3">
+   634→                            <MoneyDisplay amount={detail.totalAmount} size="sm" showWords={false} />
+   635→                          </td>
+   636→                        </tr>
+   637→                      </tfoot>
+   638→                    </table>
+   639→                  </div>
+   640→                </div>
+   641→                {/* تفکیک تسویه — تبادل/کسری/بدهی (و در حالت ساده، حروف‌خوانی جمع کل) */}
+   642→                {detail.transferAmount === detail.totalAmount && detail.exchangeValue === 0 ? (
+   643→                  <div className="mt-2 rounded-lg border border-dashed border-primary/25 bg-primary/5 px-4 py-2.5 space-y-1">
+   644→                    <p className="num text-[11px] text-muted-foreground">{moneyWordsRial(detail.totalAmount)}</p>
+   645→                    <p className="num text-[11px] text-muted-foreground">{moneyWordsToman(detail.totalAmount)}</p>
+   646→                  </div>
+   647→                ) : (
+   648→                  <SettlementBreakdown detail={detail} />
+   649→                )}
+   650→              </section>
+   651→
+   652→              {/* پرداخت */}
+   653→              {detail.status === "paid" && detail.payment ? (
+   654→                <section className="rounded-xl border border-primary/30 bg-primary/5 p-4">
+   655→                  <div className="flex items-center gap-2 mb-3 flex-wrap">
+   656→                    <Wallet className="size-4 text-primary" />
+   657→                    <h4 className="font-bold text-sm">اطلاعات بازگشت وجه</h4>
+   658→                    {detail.payment.amount === 0 && (
+   659→                      <Badge
+   660→                        variant="secondary"
+   661→                        className="gap-1 border-chart-3/40 bg-chart-3/10 text-chart-3 hover:bg-chart-3/20"
+   662→                      >
+   663→                        <Repeat2 className="size-3" />
+   664→                        تسویه بدون انتقال وجه
+   665→                      </Badge>
+   666→                    )}
+   667→                  </div>
+   668→                  <div className="grid sm:grid-cols-2 gap-3 text-sm">
+   669→                    {detail.payment.amount > 0 ? (
+   670→                      <>
+   671→                        <InfoRow icon={<Landmark className="size-4" />} label="بانک مبدأ" value={detail.payment.bankName} />
+   672→                        <InfoRow
+   673→                          icon={<Wallet className="size-4" />}
+   674→                          label="مبلغ انتقالی"
+   675→                          value={`${formatMoney(detail.payment.amount)} ریال`}
+   676→                        />
+   677→                      </>
+   678→                    ) : null}
+   679→                    <InfoRow
+   680→                      icon={<CalendarClock className="size-4" />}
+   681→                      label={detail.payment.amount === 0 ? "زمان تسویه" : "زمان انتقال"}
+   682→                      value={formatJalaliFull(new Date(detail.payment.transferredAt))}
+   683→                    />
+   684→                    {detail.payment.accountNumber && (
+   685→                      <InfoRow
+   686→                        icon={<Hash className="size-4" />}
+   687→                        label="شماره حساب مبدأ"
+   688→                        value={toFaDigits(detail.payment.accountNumber)}
+   689→                        ltr
+   690→                      />
+   691→                    )}
+   692→                    {detail.payment.cardNumber && (
+   693→                      <InfoRow
+   694→                        icon={<CreditCard className="size-4" />}
+   695→                        label="کارت مبدأ"
+   696→                        value={formatCardNumber(detail.payment.cardNumber)}
+   697→                        ltr
+   698→                      />
+   699→                    )}
+   700→                    {detail.payment.referenceNumber && (
+   701→                      <InfoRow
+   702→                        icon={<Hash className="size-4" />}
+   703→                        label="شماره پیگیری"
+   704→                        value={toFaDigits(detail.payment.referenceNumber)}
+   705→                        ltr
+   706→                      />
+   707→                    )}
+   708→                    <InfoRow
+   709→                      icon={<UserRound className="size-4" />}
+   710→                      label="ثبت‌کننده پرداخت"
+   711→                      value={detail.payment.recordedBy.fullName}
+   712→                    />
+   713→                  </div>
+   714→                </section>
+   715→              ) : isManagerRole(user.role) ? (
+   716→                <PaymentForm
+   717→                  detail={detail}
+   718→                  onPaid={(code, noTransfer) => {
+   719→                    toast.success(
+   720→                      noTransfer
+   721→                        ? `مرجوعی ${code} بدون انتقال وجه تسویه و بایگانی شد ✅`
+   722→                        : `پرداخت مرجوعی ${code} ثبت و بایگانی شد ✅`
+   723→                    );
+   724→                    onClose();
+   725→                    onPaid?.();
+   726→                  }}
+   727→                />
+   728→              ) : (
+   729→                <div className="rounded-xl border border-dashed border-chart-2/40 bg-chart-2/5 p-4 text-sm text-muted-foreground flex items-center gap-3">
+   730→                  <Hourglass className="size-5 text-chart-2 shrink-0" />
+   731→                  در انتظار بررسی و پرداخت توسط مدیریت (آقای نوروزی)
+   732→                </div>
+   733→              )}
+   734→            </div>
+   735→          </div>
+   736→        )}
+   737→      </DialogContent>
+   738→    </Dialog>
+   739→    <ReceiptDialog open={receiptOpen} onOpenChange={setReceiptOpen} detail={detail} />
+   740→    </>
+   741→  );
+   742→}
+   743→
+   744→function InfoRow({
+   745→  icon,
+   746→  label,
+   747→  value,
+   748→  ltr,
+   749→}: {
+   750→  icon: React.ReactNode;
+   751→  label: string;
+   752→  value: string;
+   753→  ltr?: boolean;
+   754→}) {
+   755→  return (
+   756→    <div className="flex items-center gap-3 rounded-lg bg-muted/40 px-3 py-2.5 min-w-0">
+   757→      <span className="text-primary shrink-0">{icon}</span>
+   758→      <div className="min-w-0">
+   759→        <p className="text-[11px] text-muted-foreground">{label}</p>
+   760→        <p className={`font-bold truncate ${ltr ? "num" : ""}`} dir={ltr ? "ltr" : undefined}>
+   761→          {value}
+   762→        </p>
+   763→      </div>
+   764→    </div>
+   765→  );
+   766→}
+   767→
+   768→// ---------- نشان نوع تسویه (تبادل/کسری/بدهی) ----------
+   769→function SettlementBadge({ type, className }: { type: SettlementType; className?: string }) {
+   770→  const meta = SETTLEMENT_META[type];
+   771→  const icon =
+   772→    type === "debt" ? (
+   773→      <TriangleAlert className="size-3" />
+   774→    ) : type === "exchange" ? (
+   775→      <Repeat2 className="size-3" />
+   776→    ) : type === "partial" ? (
+   777→      <Info className="size-3" />
+   778→    ) : (
+   779→      <Wallet className="size-3" />
+   780→    );
+   781→  return (
+   782→    <Badge
+   783→      variant={
+   784→        type === "debt" ? "destructive" : type === "full" ? "default" : type === "exchange" ? "secondary" : "outline"
+   785→      }
+   786→      className={cn(
+   787→        "gap-1",
+   788→        type === "exchange" && "border-chart-3/40 bg-chart-3/10 text-chart-3 hover:bg-chart-3/20",
+   789→        type === "partial" && "border-chart-4/40 bg-chart-4/10 text-chart-4 hover:bg-chart-4/20",
+   790→        className,
+   791→      )}
+   792→      title={meta.hint}
+   793→    >
+   794→      {icon}
+   795→      {meta.label}
+   796→    </Badge>
+   797→  );
+   798→}
+   799→
+   800→// ---------- تفکیک تسویه در جزئیات (اقلام / جایگزین / انتقال / بدهی / اعتبار) ----------
+   801→function SettlementBreakdown({ detail }: { detail: ReturnDetailDTO }) {
+   802→  const debt = detail.exchangeValue - detail.totalAmount; // بدهی مشتری وقتی جایگزین > جمع اقلام
+   803→  const credit = detail.totalAmount - detail.exchangeValue - detail.transferAmount; // اعتبار باقی‌مانده
+   804→  return (
+   805→    <div className="mt-2 rounded-xl border bg-card overflow-hidden">
+   806→      <div className="flex items-center gap-2 flex-wrap px-4 py-2.5 bg-muted/50 border-b">
+   807→        <Wallet className="size-4 text-primary shrink-0" />
+   808→        <h4 className="font-bold text-sm">تسویه با مشتری</h4>
+   809→        <SettlementBadge type={detail.settlementType} className="mr-auto" />
+   810→      </div>
+   811→      <div className="p-4 space-y-2.5">
+   812→        {/* جمع کل اقلام */}
+   813→        <div className="flex items-center justify-between gap-2 flex-wrap text-sm">
+   814→          <span className="text-muted-foreground">جمع کل اقلام مرجوعی</span>
+   815→          <span className="num font-bold">{formatMoney(detail.totalAmount)} ریال</span>
+   816→        </div>
+   817→        {/* ارزش کالای جایگزین */}
+   818→        {detail.exchangeValue > 0 && (
+   819→          <div className="flex items-center justify-between gap-2 flex-wrap text-sm">
+   820→            <span className="text-muted-foreground flex items-center gap-1">
+   821→              <Repeat2 className="size-3.5 text-chart-3" />
+   822→              ارزش کالای جایگزین
+   823→            </span>
+   824→            <span className="num font-bold text-chart-3">− {formatMoney(detail.exchangeValue)} ریال</span>
+   825→          </div>
+   826→        )}
+   827→        {/* بدهی مشتری */}
+   828→        {debt > 0 && (
+   829→          <div className="flex items-center justify-between gap-2 flex-wrap rounded-lg border border-destructive/30 bg-destructive/5 px-3.5 py-2.5">
+   830→            <span className="text-xs font-bold text-destructive flex items-center gap-1">
+   831→              <TriangleAlert className="size-3.5" />
+   832→              بدهی مشتری به فروشگاه
+   833→            </span>
+   834→            <span className="num font-extrabold text-destructive text-sm">{formatMoney(debt)} ریال</span>
+   835→          </div>
+   836→        )}
+   837→        {/* اعتبار باقی‌مانده */}
+   838→        {credit > 0 && (
+   839→          <div className="flex items-center justify-between gap-2 flex-wrap rounded-lg border border-chart-4/30 bg-chart-4/5 px-3.5 py-2.5">
+   840→            <span className="text-xs font-bold text-chart-4 flex items-center gap-1">
+   841→              <Info className="size-3.5" />
+   842→              اعتبار باقی‌مانده مشتری
+   843→            </span>
+   844→            <span className="num font-extrabold text-chart-4 text-sm">{formatMoney(credit)} ریال</span>
+   845→          </div>
+   846→        )}
+   847→        {/* مبلغ قابل انتقال — باکس اصلی */}
+   848→        <div className="rounded-lg border border-primary/25 bg-primary/5 px-3.5 py-2.5 space-y-1">
+   849→          <div className="flex items-center justify-between gap-2 flex-wrap">
+   850→            <span className="text-xs font-bold text-primary flex items-center gap-1">
+   851→              <Wallet className="size-3.5" />
+   852→              مبلغ قابل انتقال به حساب مشتری
+   853→            </span>
+   854→            <span className="num font-extrabold text-primary text-sm">{formatMoney(detail.transferAmount)} ریال</span>
+   855→          </div>
+   856→          {detail.transferAmount > 0 && (
+   857→            <>
+   858→              <p className="num text-[11px] text-muted-foreground">{moneyWordsRial(detail.transferAmount)}</p>
+   859→              <p className="num text-[11px] text-muted-foreground">{moneyWordsToman(detail.transferAmount)}</p>
+   860→            </>
+   861→          )}
+   862→        </div>
+   863→        {/* دلیل اختلاف تسویه */}
+   864→        {detail.transferNote && (
+   865→          <div className="rounded-lg border border-primary/20 border-r-2 border-r-primary/50 bg-muted/40 px-3.5 py-2.5 flex items-start gap-2.5">
+   866→            <MessageSquareText className="size-4 text-primary shrink-0 mt-0.5" />
+   867→            <div className="min-w-0">
+   868→              <p className="text-[11px] text-muted-foreground">دلیل اختلاف تسویه</p>
+   869→              <p className="text-sm font-semibold leading-6 break-words">{detail.transferNote}</p>
+   870→            </div>
+   871→          </div>
+   872→        )}
+   873→      </div>
+   874→    </div>
+   875→  );
+   876→}
+   877→
+   878→// ---------- فرم پرداخت مدیر ----------
+   879→function moneyWordsRial(n: number) {
+   880→  return moneyWords(n).rial;
+   881→}
+   882→function moneyWordsToman(n: number) {
+   883→  return moneyWords(n).toman;
+   884→}
+   885→export function PaymentForm({
+   886→  detail,
+   887→  onPaid,
+   888→}: {
+   889→  detail: ReturnDetailDTO;
+   890→  onPaid: (code: string, noTransfer?: boolean) => void;
+   891→}) {
+   892→  // حالت تسویه بدون انتقال وجه — تبادل کالا / بدهی مشتری / اعتبار
+   893→  const noTransfer = detail.transferAmount === 0;
+   894→  const [bankName, setBankName] = useState("");
+   895→  const [accountNumber, setAccountNumber] = useState("");
+   896→  const [cardNumber, setCardNumber] = useState("");
+   897→  const [referenceNumber, setReferenceNumber] = useState("");
+   898→  const [transferredAt, setTransferredAt] = useState<Date | null>(null);
+   899→  const [submitting, setSubmitting] = useState(false);
+   900→
+   901→  async function submit() {
+   902→    if (submitting) return;
+   903→    if (!transferredAt) {
+   904→      toast.error(noTransfer ? "زمان تسویه را انتخاب کنید" : "زمان انتقال وجه را انتخاب کنید");
+   905→      return;
+   906→    }
+   907→    if (!noTransfer) {
+   908→      if (!bankName) {
+   909→        toast.error("بانک مبدأ را انتخاب کنید");
+   910→        return;
+   911→      }
+   912→      if (!accountNumber && !digitsOnly(cardNumber) && !referenceNumber) {
+   913→        toast.error("حداقل شماره حساب، کارت یا شماره پیگیری را وارد کنید");
+   914→        return;
+   915→      }
+   916→      if (cardNumber && !/^\d{16}$/.test(digitsOnly(cardNumber))) {
+   917→        toast.error("شماره کارت مبدأ باید ۱۶ رقم باشد");
+   918→        return;
+   919→      }
+   920→    }
+   921→    setSubmitting(true);
+   922→    try {
+   923→      const res = await fetch(`/api/returns/${detail.id}/payment`, {
+   924→        method: "POST",
+   925→        headers: { "Content-Type": "application/json" },
+   926→        body: JSON.stringify(
+   927→          noTransfer
+   928→            ? { noTransfer: true, transferredAt: transferredAt.toISOString() }
+   929→            : {
+   930→                bankName,
+   931→                accountNumber: accountNumber.trim() || null,
+   932→                cardNumber: digitsOnly(cardNumber) || null,
+   933→                referenceNumber: referenceNumber.trim() || null,
+   934→                transferredAt: transferredAt.toISOString(),
+   935→              }
+   936→        ),
+   937→      });
+   938→      const data = await res.json();
+   939→      if (!res.ok) {
+   940→        toast.error(data.error || "ثبت پرداخت ناموفق بود");
+   941→        return;
+   942→      }
+   943→      onPaid(data.code, noTransfer);
+   944→    } catch {
+   945→      toast.error("ارتباط با سرور برقرار نشد");
+   946→    } finally {
+   947→      setSubmitting(false);
+   948→    }
+   949→  }
+   950→
+   951→  const amountDiffers = detail.transferAmount !== detail.totalAmount || detail.exchangeValue > 0;
+   952→
+   953→  return (
+   954→    <section className="rounded-xl border-2 border-primary/30 bg-card p-4 space-y-4">
+   955→      <div className="flex items-center gap-2 flex-wrap">
+   956→        <Wallet className="size-4 text-primary" />
+   957→        <h4 className="font-bold text-sm">ثبت بازگشت وجه (ویژه مدیریت)</h4>
+   958→        <SettlementBadge type={detail.settlementType} className="mr-auto" />
+   959→      </div>
+   960→      <IlluminatedDivider />
+   961→      <div className="rounded-lg bg-primary/5 border border-primary/20 p-3 space-y-2">
+   962→        <div className="flex items-center gap-1.5">
+   963→          <Wallet className="size-3.5 text-primary" />
+   964→          <p className="text-xs font-bold text-primary">مبلغ قابل انتقال به حساب مشتری</p>
+   965→        </div>
+   966→        <MoneyDisplay amount={detail.transferAmount} size="md" showWords={detail.transferAmount > 0} />
+   967→        {amountDiffers && (
+   968→          <div className="pt-2 border-t border-primary/15 space-y-1 text-[11px]">
+   969→            <p className="flex items-center justify-between gap-2 flex-wrap">
+   970→              <span className="text-muted-foreground">جمع اقلام مرجوعی</span>
+   971→              <span className="num font-semibold">{formatMoney(detail.totalAmount)} ریال</span>
+   972→            </p>
+   973→            {detail.exchangeValue > 0 && (
+   974→              <p className="flex items-center justify-between gap-2 flex-wrap">
+   975→                <span className="text-muted-foreground flex items-center gap-1">
+   976→                  <Repeat2 className="size-3 text-chart-3" />
+   977→                  ارزش کالای جایگزین
+   978→                </span>
+   979→                <span className="num font-semibold text-chart-3">− {formatMoney(detail.exchangeValue)} ریال</span>
+   980→              </p>
+   981→            )}
+   982→          </div>
+   983→        )}
+   984→      </div>
+   985→      {noTransfer ? (
+   986→        <>
+   987→          {/* حالت تسویه بدون انتقال وجه — فقط زمان تسویه */}
+   988→          <div className="rounded-xl border border-chart-3/40 bg-chart-3/10 p-3.5 flex items-start gap-2.5" role="status">
+   989→            <Info className="size-4 text-chart-3 shrink-0 mt-0.5" />
+   990→            <p className="text-xs leading-6">
+   991→              این مرجوعی بدون انتقال وجه تسویه می‌شود (تبادل کالا / بدهی مشتری / اعتبار).
+   992→              برای بایگانی، زمان تسویه را انتخاب کنید.
+   993→            </p>
+   994→          </div>
+   995→          <div className="space-y-1.5">
+   996→            <label className="text-xs font-semibold">زمان تسویه</label>
+   997→            <JalaliDateTimePicker value={transferredAt} onChange={setTransferredAt} placeholder="انتخاب زمان تسویه" />
+   998→          </div>
+   999→        </>
+  1000→      ) : (
+  1001→        <div className="grid sm:grid-cols-2 gap-3">
+  1002→          <div className="space-y-1.5">
+  1003→            <label className="text-xs font-semibold flex items-center gap-1">
+  1004→              <Landmark className="size-3.5 text-primary" />
+  1005→              بانک مبدأ (انتقال وجه)
+  1006→            </label>
+  1007→            <Select value={bankName} onValueChange={setBankName}>
+  1008→              <SelectTrigger className="h-10">
+  1009→                <SelectValue placeholder="انتخاب بانک…" />
+  1010→              </SelectTrigger>
+  1011→              <SelectContent className="max-h-72">
+  1012→                {BANKS.map((b) => (
+  1013→                  <SelectItem key={b} value={b}>
+  1014→                    {b}
+  1015→                  </SelectItem>
+  1016→                ))}
+  1017→              </SelectContent>
+  1018→            </Select>
+  1019→          </div>
+  1020→          <div className="space-y-1.5">
+  1021→            <label className="text-xs font-semibold">زمان انتقال وجه</label>
+  1022→            <JalaliDateTimePicker value={transferredAt} onChange={setTransferredAt} placeholder="انتخاب زمان انتقال" />
+  1023→          </div>
+  1024→          <div className="space-y-1.5">
+  1025→            <label className="text-xs font-semibold">شماره حساب مبدأ</label>
+  1026→            <Input
+  1027→              dir="ltr"
+  1028→              className="num text-left h-10"
+  1029→              placeholder="اختیاری — مثال: 0101234567890"
+  1030→              value={accountNumber ? toFaDigits(accountNumber) : ""}
+  1031→              onChange={(e) => setAccountNumber(toEnDigits(e.target.value).replace(/[^\d]/g, "").slice(0, 26))}
+  1032→            />
+  1033→          </div>
+  1034→          <div className="space-y-1.5">
+  1035→            <label className="text-xs font-semibold">شماره کارت مبدأ</label>
+  1036→            <Input
+  1037→              dir="ltr"
+  1038→              inputMode="numeric"
+  1039→              className="num text-left h-10"
+  1040→              placeholder="اختیاری — ۱۶ رقم"
+  1041→              value={cardNumber ? formatCardNumber(cardNumber) : ""}
+  1042→              onChange={(e) => setCardNumber(digitsOnly(e.target.value).slice(0, 16))}
+  1043→            />
+  1044→          </div>
+  1045→          <div className="space-y-1.5 sm:col-span-2">
+  1046→            <label className="text-xs font-semibold flex items-center gap-1">
+  1047→              <Hash className="size-3.5 text-primary" />
+  1048→              شماره پیگیری/ارجاع انتقال
+  1049→            </label>
+  1050→            <Input
+  1051→              dir="ltr"
+  1052→              className="text-left h-10"
+  1053→              placeholder="اختیاری — شماره ارجاع بانک"
+  1054→              value={referenceNumber}
+  1055→              onChange={(e) => setReferenceNumber(e.target.value.slice(0, 40))}
+  1056→            />
+  1057→          </div>
+  1058→        </div>
+  1059→      )}
+  1060→      <Button className="w-full h-12 font-bold" onClick={submit} disabled={submitting}>
+  1061→        {submitting ? (
+  1062→          <>
+  1063→            <Loader2 className="size-4 animate-spin" /> در حال ثبت…
+  1064→          </>
+  1065→        ) : (
+  1066→          <>
+  1067→            <CheckCircle2 className="size-4" />
+  1068→            {noTransfer ? "تسویه و بایگانی بدون انتقال وجه" : "ثبت پرداخت و بایگانی مرجوعی"}
+  1069→          </>
+  1070→        )}
+  1071→      </Button>
+  1072→    </section>
+  1073→  );
+  1074→}
+  1075→
+  1076→/** دکمه خروجی اکسل آرشیو (مدیر) */
+  1077→export function ExportReturnsButton() {
+  1078→  const [loading, setLoading] = useState(false);
+  1079→  return (
+  1080→    <Button
+  1081→      variant="outline"
+  1082→      className="h-11 font-semibold"
+  1083→      disabled={loading}
+  1084→      onClick={async () => {
+  1085→        setLoading(true);
+  1086→        try {
+  1087→          const res = await fetch("/api/returns/export");
+  1088→          if (!res.ok) {
+  1089→            const d = await res.json().catch(() => ({}));
+  1090→            toast.error(d.error || "خروجی اکسل در دسترس نیست");
+  1091→            return;
+  1092→          }
+  1093→          const blob = await res.blob();
+  1094→          const url = URL.createObjectURL(blob);
+  1095→          const a = document.createElement("a");
+  1096→          a.href = url;
+  1097→          a.download = "hyper-zeytoon-returns.xlsx";
+  1098→          a.click();
+  1099→          URL.revokeObjectURL(url);
+  1100→          toast.success("فایل اکسل آرشیو مرجوعی‌ها دانلود شد");
+  1101→        } catch {
+  1102→          toast.error("دانلود خروجی ناموفق بود");
+  1103→        } finally {
+  1104→          setLoading(false);
+  1105→        }
+  1106→      }}
+  1107→    >
+  1108→      {loading ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
+  1109→      خروجی اکسل (هلو)
+  1110→    </Button>
+  1111→  );
+  1112→}
+  1113→

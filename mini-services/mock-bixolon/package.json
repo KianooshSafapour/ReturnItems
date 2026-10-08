@@ -1,0 +1,8 @@
+{
+  "name": "mock-bixolon",
+  "version": "1.0.0",
+  "description": "شبیه‌ساز سرویس Web Print SDK چاپگر Bixolon برای QA در سندباکس (پورت 18080) — روی رایانه واقعی فروشگاه، برنامه رسمی Bixolon جایگزین این سرویس است",
+  "scripts": {
+    "dev": "bun --hot index.ts"
+  }
+}

@@ -1,0 +1,1252 @@
+     1→"use client";
+     2→
+     3→// مرکز پیامک — اتصال پنل، مدیریت قالب‌های پیام و تاریخچه ارسال
+     4→// ویژه مدیران سامانه (آقای نوروزی و کیانوش صفاپور)
+     5→import { useCallback, useEffect, useState } from "react";
+     6→import { Badge } from "@/components/ui/badge";
+     7→import { Button } from "@/components/ui/button";
+     8→import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+     9→import { Checkbox } from "@/components/ui/checkbox";
+    10→import {
+    11→  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+    12→} from "@/components/ui/dialog";
+    13→import { Input } from "@/components/ui/input";
+    14→import { Label } from "@/components/ui/label";
+    15→import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+    16→import { Skeleton } from "@/components/ui/skeleton";
+    17→import { Switch } from "@/components/ui/switch";
+    18→import { Textarea } from "@/components/ui/textarea";
+    19→import { toast } from "sonner";
+    20→import { motion } from "framer-motion";
+    21→import {
+    22→  BellRing, CheckCircle2, Loader2, MessageCircle, Pencil, Plus, RefreshCw, Send,
+    23→  Smartphone, Trash2, TriangleAlert, ExternalLink, Info, UserCheck,
+    24→} from "lucide-react";
+    25→import { formatMoney, toFaDigits } from "@/lib/money";
+    26→import { formatJalaliDateTime } from "@/lib/jalali";
+    27→import { DEFAULT_SMS_ALERT_TEMPLATE, SMS_PLACEHOLDERS, renderSmsTemplate, smsSegments } from "@/lib/sms";
+    28→import { isValidIranMobile } from "@/lib/validators";
+    29→import { cn } from "@/lib/utils";
+    30→import { AvatarBadge } from "./avatar-badge";
+    31→import { IlluminatedDivider } from "./ornaments";
+    32→import type { SessionUser, SmsConfigDTO, SmsTemplateDTO, SmsLogRow, UserRow } from "./types";
+    33→
+    34→/* ==========================================================================
+    35→   مرکز پیامک — ریشه
+    36→   ========================================================================== */
+    37→
+    38→export function SmsCenter({ user }: { user: SessionUser }) {
+    39→  return (
+    40→    <section aria-label="مرکز پیامک" className="space-y-5">
+    41→      <motion.header
+    42→        initial={{ opacity: 0, y: -10 }}
+    43→        animate={{ opacity: 1, y: 0 }}
+    44→        transition={{ duration: 0.5, ease: "easeOut" }}
+    45→        className="space-y-4"
+    46→      >
+    47→        <div className="flex items-center gap-3">
+    48→          <div className="flex size-12 shrink-0 items-center justify-center rounded-2xl border border-primary/25 bg-primary/10">
+    49→            <MessageCircle className="size-6 text-primary" />
+    50→          </div>
+    51→          <div className="min-w-0">
+    52→            <p className="text-[11px] font-bold text-chart-2">اطلاع‌رسانی خودکار مشتریان</p>
+    53→            <h3 className="mt-0.5 text-xl font-extrabold tracking-tight sm:text-2xl">مرکز پیامک</h3>
+    54→            <p className="mt-1 text-xs leading-6 text-muted-foreground sm:text-sm">
+    55→              اتصال پنل پیامکی، قالب‌های پیام تأیید پرداخت و تاریخچه ارسال به مشتریان
+    56→            </p>
+    57→          </div>
+    58→        </div>
+    59→        <IlluminatedDivider />
+    60→      </motion.header>
+    61→
+    62→      <SmsConnectionCard />
+    63→      <SmsAlertsCard />
+    64→      <SmsTemplatesCard user={user} />
+    65→      <SmsLogsCard />
+    66→    </section>
+    67→  );
+    68→}
+    69→
+    70→/* ==========================================================================
+    71→   کارت ۱ — اتصال پنل پیامک
+    72→   ========================================================================== */
+    73→
+    74→interface ProviderOption {
+    75→  id: string;
+    76→  label: string;
+    77→  needs: string[];
+    78→  hint: string;
+    79→  docs: string | null;
+    80→}
+    81→
+    82→function SmsConnectionCard() {
+    83→  const [loading, setLoading] = useState(true);
+    84→  const [saving, setSaving] = useState(false);
+    85→  const [testing, setTesting] = useState(false);
+    86→  const [config, setConfig] = useState<SmsConfigDTO | null>(null);
+    87→  const [providers, setProviders] = useState<ProviderOption[]>([]);
+    88→
+    89→  // فیلدهای فرم (محرمانه‌ها فقط هنگام تایپ پر می‌شوند)
+    90→  const [enabled, setEnabled] = useState(false);
+    91→  const [provider, setProvider] = useState("");
+    92→  const [apiKey, setApiKey] = useState("");
+    93→  const [username, setUsername] = useState("");
+    94→  const [password, setPassword] = useState("");
+    95→  const [sender, setSender] = useState("");
+    96→  const [customUrl, setCustomUrl] = useState("");
+    97→  const [customMethod, setCustomMethod] = useState("POST");
+    98→  const [customHeaders, setCustomHeaders] = useState("");
+    99→  const [customBody, setCustomBody] = useState("");
+   100→  const [testPhone, setTestPhone] = useState("");
+   101→
+   102→  const load = useCallback(async () => {
+   103→    try {
+   104→      const res = await fetch("/api/admin/sms-config", { cache: "no-store" });
+   105→      if (res.ok) {
+   106→        const d = (await res.json()) as SmsConfigDTO;
+   107→        setConfig(d);
+   108→        setEnabled(d.enabled);
+   109→        setProvider(d.provider ?? "");
+   110→        setSender(d.sender ?? "");
+   111→        setUsername(d.username ?? "");
+   112→        setCustomUrl(d.customUrl ?? "");
+   113→        setCustomMethod(d.customMethod || "POST");
+   114→        setCustomHeaders(d.customHeaders ?? "");
+   115→        setCustomBody(d.customBody ?? "");
+   116→        if (Array.isArray(d.providers)) setProviders(d.providers);
+   117→      }
+   118→    } catch {
+   119→      toast.error("خطا در دریافت تنظیمات پیامک");
+   120→    } finally {
+   121→      setLoading(false);
+   122→    }
+   123→  }, []);
+   124→
+   125→  // بارگذاری اولیه پیکربندی — با پرچم لغو
+   126→  useEffect(() => {
+   127→    let cancelled = false;
+   128→    fetch("/api/admin/sms-config", { cache: "no-store" })
+   129→      .then((r) => (r.ok ? r.json() : Promise.reject(new Error("sms-config"))))
+   130→      .then((d: SmsConfigDTO) => {
+   131→        if (cancelled) return;
+   132→        setConfig(d);
+   133→        setEnabled(d.enabled);
+   134→        setProvider(d.provider ?? "");
+   135→        setSender(d.sender ?? "");
+   136→        setUsername(d.username ?? "");
+   137→        setCustomUrl(d.customUrl ?? "");
+   138→        setCustomMethod(d.customMethod || "POST");
+   139→        setCustomHeaders(d.customHeaders ?? "");
+   140→        setCustomBody(d.customBody ?? "");
+   141→        if (Array.isArray(d.providers)) setProviders(d.providers);
+   142→      })
+   143→      .catch(() => {})
+   144→      .finally(() => {
+   145→        if (!cancelled) setLoading(false);
+   146→      });
+   147→    return () => {
+   148→      cancelled = true;
+   149→    };
+   150→  }, []);
+   151→
+   152→  const selected = providers.find((p) => p.id === provider) ?? null;
+   153→  const needsApiKey = selected?.needs.includes("apiKey");
+   154→  const needsUsername = selected?.needs.includes("username");
+   155→  const needsPassword = selected?.needs.includes("password");
+   156→  const needsSender = selected?.needs.includes("sender");
+   157→  const isCustom = provider === "custom";
+   158→
+   159→  async function save() {
+   160→    if (saving) return;
+   161→    setSaving(true);
+   162→    try {
+   163→      const payload: Record<string, unknown> = {
+   164→        enabled: enabled ? "1" : "",
+   165→        provider,
+   166→        sender,
+   167→      };
+   168→      // محرمانه‌ها: خالی = پاک‌نشده (تنها اگر کاربر چیزی تایپ کند ارسال می‌شود)
+   169→      if (apiKey.trim()) payload.apiKey = apiKey.trim();
+   170→      if (username.trim() || config?.username) payload.username = username.trim();
+   171→      if (password.trim()) payload.password = password.trim();
+   172→      if (isCustom) {
+   173→        payload.customUrl = customUrl;
+   174→        payload.customMethod = customMethod;
+   175→        payload.customHeaders = customHeaders;
+   176→        payload.customBody = customBody;
+   177→      }
+   178→      const res = await fetch("/api/admin/sms-config", {
+   179→        method: "PUT",
+   180→        headers: { "Content-Type": "application/json" },
+   181→        body: JSON.stringify(payload),
+   182→      });
+   183→      const d = await res.json();
+   184→      if (res.ok) {
+   185→        toast.success(d.ready ? "تنظیمات پنل پیامک ذخیره شد — پنل آماده ارسال است ✅" : "تنظیمات ذخیره شد (هنوز ناقص است)");
+   186→        setConfig(d as SmsConfigDTO);
+   187→        setApiKey("");
+   188→        setPassword("");
+   189→      } else {
+   190→        toast.error(d.error || "خطا در ذخیره تنظیمات");
+   191→      }
+   192→    } catch {
+   193→      toast.error("ارتباط با سرور برقرار نشد");
+   194→    } finally {
+   195→      setSaving(false);
+   196→    }
+   197→  }
+   198→
+   199→  async function sendTest() {
+   200→    if (testing) return;
+   201→    const phone = testPhone.trim();
+   202→    if (!/^09\d{9}$/.test(phone.replace(/\D/g, ""))) {
+   203→      toast.error("شماره موبایل آزمایشی معتبر وارد کنید (مثل ۰۹۱۲۳۴۵۶۷۸۹)");
+   204→      return;
+   205→    }
+   206→    setTesting(true);
+   207→    try {
+   208→      const res = await fetch("/api/sms/test", {
+   209→        method: "POST",
+   210→        headers: { "Content-Type": "application/json" },
+   211→        body: JSON.stringify({ phone }),
+   212→      });
+   213→      const d = await res.json();
+   214→      if (res.ok && d.sent) {
+   215→        toast.success("پیامک آزمایشی ارسال شد ✅", {
+   216→          description: d.messageId ? `شناسه پیام در پنل: ${d.messageId}` : undefined,
+   217→        });
+   218→      } else {
+   219→        toast.error(d.error || "ارسال پیامک آزمایشی ناموفق بود", {
+   220→          description: d.responseSummary ? String(d.responseSummary).slice(0, 160) : undefined,
+   221→          duration: 9000,
+   222→        });
+   223→      }
+   224→    } catch {
+   225→      toast.error("ارتباط با سرور برقرار نشد");
+   226→    } finally {
+   227→      setTesting(false);
+   228→    }
+   229→  }
+   230→
+   231→  if (loading) {
+   232→    return (
+   233→      <Card>
+   234→        <CardContent className="space-y-3 pt-6">
+   235→          <Skeleton className="h-6 w-48" />
+   236→          <Skeleton className="h-11 w-full" />
+   237→          <Skeleton className="h-11 w-full" />
+   238→          <Skeleton className="h-11 w-2/3" />
+   239→        </CardContent>
+   240→      </Card>
+   241→    );
+   242→  }
+   243→
+   244→  return (
+   245→    <Card className="pattern-girih border-primary/20">
+   246→      <CardHeader className="pb-3">
+   247→        <CardTitle className="flex items-center gap-2 flex-wrap text-base">
+   248→          <Smartphone className="size-5 text-primary" />
+   249→          اتصال پنل پیامک
+   250→          {config?.ready ? (
+   251→            <Badge className="gap-1 border border-primary/30 bg-primary/10 text-primary">
+   252→              <CheckCircle2 className="size-3" />
+   253→              آماده ارسال
+   254→            </Badge>
+   255→          ) : (
+   256→            <Badge variant="outline" className="gap-1 text-muted-foreground">
+   257→              <TriangleAlert className="size-3" />
+   258→              {config?.enabled ? "ناقص" : "غیرفعال"}
+   259→            </Badge>
+   260→          )}
+   261→          <Button
+   262→            variant="ghost"
+   263→            size="icon"
+   264→            className="size-8 mr-auto"
+   265→            onClick={load}
+   266→            aria-label="بازخوانی"
+   267→          >
+   268→            <RefreshCw className="size-4" />
+   269→          </Button>
+   270→        </CardTitle>
+   271→        <CardDescription className="leading-6">
+   272→          پس از پیکربندی، با هر ثبت پرداخت مرجوعی، پیام تأیید به‌صورت خودکار برای مشتری ارسال
+   273→          می‌شود. پنل‌های پشتیبانی‌شده: فراز اس‌ام‌اس (IPPanel)، ملی پیامک، پیامیتو، پیام رسان،
+   274→          بهین پیامک، اس‌ام‌اس آی‌آر، وب‌وان اس‌ام‌اس و هر پنل دیگری (حالت سفارشی).
+   275→        </CardDescription>
+   276→      </CardHeader>
+   277→      <CardContent className="space-y-4">
+   278→        {/* فعال/غیرفعال */}
+   279→        <div className="flex items-center justify-between gap-3 rounded-xl border bg-muted/40 px-4 py-3">
+   280→          <div className="min-w-0">
+   281→            <p className="text-sm font-bold">ارسال پیامک به مشتریان</p>
+   282→            <p className="text-xs text-muted-foreground mt-0.5">
+   283→              فعال‌سازی ارسال خودکار پیام تأیید پرداخت
+   284→            </p>
+   285→          </div>
+   286→          <Switch checked={enabled} onCheckedChange={setEnabled} aria-label="فعال‌سازی پنل پیامک" />
+   287→        </div>
+   288→
+   289→        {/* انتخاب پنل */}
+   290→        <div className="space-y-2">
+   291→          <Label>پنل پیامکی</Label>
+   292→          <Select value={provider || "__none"} onValueChange={(v) => setProvider(v === "__none" ? "" : v)}>
+   293→            <SelectTrigger className="h-11">
+   294→              <SelectValue placeholder="انتخاب پنل پیامک…" />
+   295→            </SelectTrigger>
+   296→            <SelectContent>
+   297→              <SelectItem value="__none">— انتخاب نشده —</SelectItem>
+   298→              {providers.map((p) => (
+   299→                <SelectItem key={p.id} value={p.id}>
+   300→                  {p.label}
+   301→                </SelectItem>
+   302→              ))}
+   303→            </SelectContent>
+   304→          </Select>
+   305→          {selected && (
+   306→            <p className="text-[11px] text-muted-foreground leading-6 rounded-lg bg-muted/50 border border-dashed px-3 py-2 flex items-start gap-1.5">
+   307→              <Info className="size-3.5 shrink-0 mt-1 text-primary" />
+   308→              <span>
+   309→                {selected.hint}
+   310→                {selected.docs && (
+   311→                  <>
+   312→                    {" "}
+   313→                    <a
+   314→                      href={selected.docs}
+   315→                      target="_blank"
+   316→                      rel="noopener noreferrer"
+   317→                      className="text-primary underline underline-offset-2 inline-flex items-center gap-0.5"
+   318→                      dir="ltr"
+   319→                    >
+   320→                      مستندات <ExternalLink className="size-3" />
+   321→                    </a>
+   322→                  </>
+   323→                )}
+   324→              </span>
+   325→            </p>
+   326→          )}
+   327→        </div>
+   328→
+   329→        {provider && !isCustom && (
+   330→          <div className="grid gap-4 sm:grid-cols-2">
+   331→            {needsApiKey && (
+   332→              <div className="space-y-2">
+   333→                <Label htmlFor="sms-apikey">کلید API پنل</Label>
+   334→                <Input
+   335→                  id="sms-apikey"
+   336→                  className="ltr-value h-11"
+   337→                  type="password"
+   338→                  autoComplete="off"
+   339→                  placeholder={config?.hasApiKey ? `تنظیم شده ✓ (${config.apiKeyMasked}) — برای تغییر وارد کنید` : "مثال: ROlxxxxxim-xxxx="}
+   340→                  value={apiKey}
+   341→                  onChange={(e) => setApiKey(e.target.value)}
+   342→                />
+   343→              </div>
+   344→            )}
+   345→            {needsUsername && (
+   346→              <div className="space-y-2">
+   347→                <Label htmlFor="sms-username">نام کاربری وب‌سرویس</Label>
+   348→                <Input
+   349→                  id="sms-username"
+   350→                  className="ltr-value h-11"
+   351→                  autoComplete="off"
+   352→                  placeholder={config?.username || "نام کاربری پنل"}
+   353→                  value={username}
+   354→                  onChange={(e) => setUsername(e.target.value)}
+   355→                />
+   356→              </div>
+   357→            )}
+   358→            {needsPassword && (
+   359→              <div className="space-y-2">
+   360→                <Label htmlFor="sms-password">گذرواژه وب‌سرویس</Label>
+   361→                <Input
+   362→                  id="sms-password"
+   363→                  className="ltr-value h-11"
+   364→                  type="password"
+   365→                  autoComplete="new-password"
+   366→                  placeholder={config?.hasPassword ? `تنظیم شده ✓ (${config.passwordMasked}) — برای تغییر وارد کنید` : "گذرواژه پنل"}
+   367→                  value={password}
+   368→                  onChange={(e) => setPassword(e.target.value)}
+   369→                />
+   370→              </div>
+   371→            )}
+   372→            {needsSender && (
+   373→              <div className="space-y-2">
+   374→                <Label htmlFor="sms-sender">شماره خط ارسال</Label>
+   375→                <Input
+   376→                  id="sms-sender"
+   377→                  className="num h-11"
+   378→                  inputMode="numeric"
+   379→                  placeholder={provider === "faraz" ? "مثال: +۹۸۳۰۰۰۵۰۵" : "مثال: ۳۰۰۰۴۰۴۰ یا ۵۰۰۰…"}
+   380→                  value={sender}
+   381→                  onChange={(e) => setSender(e.target.value.trim())}
+   382→                />
+   383→              </div>
+   384→            )}
+   385→          </div>
+   386→        )}
+   387→
+   388→        {/* پنل سفارشی */}
+   389→        {isCustom && (
+   390→          <div className="space-y-4 rounded-xl border border-dashed border-primary/30 bg-primary/5 p-4">
+   391→            <p className="text-xs font-bold text-primary flex items-center gap-1.5">
+   392→              <Info className="size-4" />
+   393→              پنل سفارشی — درخواست HTTP دلخواه با جای‌نگهدارها
+   394→            </p>
+   395→            <div className="grid gap-4 sm:grid-cols-3">
+   396→              <div className="space-y-2 sm:col-span-2">
+   397→                <Label htmlFor="sms-custom-url">آدرس درخواست (URL)</Label>
+   398→                <Input
+   399→                  id="sms-custom-url"
+   400→                  dir="ltr"
+   401→                  className="text-left h-11"
+   402→                  placeholder="https://panel.example.com/api/send?to={{phone}}&text={{message}}"
+   403→                  value={customUrl}
+   404→                  onChange={(e) => setCustomUrl(e.target.value)}
+   405→                />
+   406→              </div>
+   407→              <div className="space-y-2">
+   408→                <Label>متد</Label>
+   409→                <Select value={customMethod} onValueChange={setCustomMethod}>
+   410→                  <SelectTrigger className="h-11">
+   411→                    <SelectValue />
+   412→                  </SelectTrigger>
+   413→                  <SelectContent>
+   414→                    <SelectItem value="POST">POST</SelectItem>
+   415→                    <SelectItem value="GET">GET</SelectItem>
+   416→                  </SelectContent>
+   417→                </Select>
+   418→              </div>
+   419→            </div>
+   420→            <div className="space-y-2">
+   421→              <Label htmlFor="sms-custom-headers">هدرها (JSON — اختیاری)</Label>
+   422→              <Textarea
+   423→                id="sms-custom-headers"
+   424→                dir="ltr"
+   425→                rows={3}
+   426→                className="text-left text-xs font-mono"
+   427→                placeholder={`{"Authorization": "کلید شما", "Content-Type": "application/json"}`}
+   428→                value={customHeaders}
+   429→                onChange={(e) => setCustomHeaders(e.target.value)}
+   430→              />
+   431→            </div>
+   432→            <div className="space-y-2">
+   433→              <Label htmlFor="sms-custom-body">بدنه درخواست (JSON — برای POST)</Label>
+   434→              <Textarea
+   435→                id="sms-custom-body"
+   436→                dir="ltr"
+   437→                rows={4}
+   438→                className="text-left text-xs font-mono"
+   439→                placeholder={`{"sender": "{{sender}}", "receptor": "{{phone}}", "message": "{{message}}"}`}
+   440→                value={customBody}
+   441→                onChange={(e) => setCustomBody(e.target.value)}
+   442→              />
+   443→              <p className="text-[10px] text-muted-foreground leading-5">
+   444→                جای‌نگهدارها: <span dir="ltr" className="num">{"{{phone}}"}</span> (۰۹…)،
+   445→                <span dir="ltr" className="num"> {"{{phone_e164}}"}</span> (+۹۸…)،
+   446→                <span dir="ltr" className="num"> {"{{message}}"}</span> (متن کدگذاری‌شده برای URL / خام در JSON)،
+   447→                <span dir="ltr" className="num"> {"{{sender}}"}</span>
+   448→              </p>
+   449→            </div>
+   450→          </div>
+   451→        )}
+   452→
+   453→        {config && !config.ready && config.enabled && config.missing.length > 0 && (
+   454→          <p className="text-xs text-destructive flex items-center gap-1.5">
+   455→            <TriangleAlert className="size-4 shrink-0" />
+   456→            برای فعال‌شدن ارسال، این موارد را کامل کنید: {config.missing.join("، ")}
+   457→          </p>
+   458→        )}
+   459→
+   460→        <div className="flex flex-col sm:flex-row gap-2">
+   461→          <Button onClick={save} disabled={saving} className="gap-1.5 flex-1 h-11">
+   462→            {saving ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
+   463→            ذخیره تنظیمات پنل
+   464→          </Button>
+   465→        </div>
+   466→
+   467→        {/* ارسال آزمایشی */}
+   468→        {config?.ready && (
+   469→          <div className="rounded-xl border border-primary/25 bg-primary/5 p-4 space-y-3">
+   470→            <p className="text-sm font-bold text-primary flex items-center gap-1.5">
+   471→              <Send className="size-4" />
+   472→              پیامک آزمایشی
+   473→            </p>
+   474→            <p className="text-xs text-muted-foreground leading-6">
+   475→              پیش از استفاده واقعی، با شماره موبایل خودتان ارسال را بیازمایید.
+   476→            </p>
+   477→            <div className="flex flex-col sm:flex-row gap-2">
+   478→              <Input
+   479→                dir="ltr"
+   480→                inputMode="numeric"
+   481→                className="num text-left h-11 flex-1"
+   482→                placeholder="۰۹۱۲۳۴۵۶۷۸۹"
+   483→                value={testPhone}
+   484→                onChange={(e) => setTestPhone(e.target.value)}
+   485→                aria-label="شماره موبایل آزمایشی"
+   486→              />
+   487→              <Button variant="outline" onClick={sendTest} disabled={testing} className="gap-1.5 h-11">
+   488→                {testing ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
+   489→                ارسال آزمایشی
+   490→              </Button>
+   491→            </div>
+   492→          </div>
+   493→        )}
+   494→      </CardContent>
+   495→    </Card>
+   496→  );
+   497→}
+   498→
+   499→/* ==========================================================================
+   500→   کارت ۲ — هشدار پیامکی مرجوعی به مدیران
+   501→   وقتی صندوقدار مرجوعی جدیدی ثبت می‌کند، مدیران انتخاب‌شده پیامک هشدار می‌گیرند
+   502→   (مثلاً وقتی آقای نوروزی در مرخصی است و حضور ندارد)
+   503→   ========================================================================== */
+   504→
+   505→const ALERT_PLACEHOLDER_TOKENS = [
+   506→  "{{مشتری}}",
+   507→  "{{مبلغ_تومان}}",
+   508→  "{{شماره_پیگیری}}",
+   509→  "{{صندوقدار}}",
+   510→  "{{تعداد}}",
+   511→  "{{کالا}}",
+   512→  "{{فروشگاه}}",
+   513→  "{{تاریخ}}",
+   514→  "{{ساعت}}",
+   515→];
+   516→
+   517→function SmsAlertsCard() {
+   518→  const [loading, setLoading] = useState(true);
+   519→  const [saving, setSaving] = useState(false);
+   520→  const [config, setConfig] = useState<SmsConfigDTO | null>(null);
+   521→  const [managers, setManagers] = useState<UserRow[]>([]);
+   522→
+   523→  const [alertEnabled, setAlertEnabled] = useState(false);
+   524→  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+   525→  const [template, setTemplate] = useState(DEFAULT_SMS_ALERT_TEMPLATE);
+   526→
+   527→  const load = useCallback(async () => {
+   528→    try {
+   529→      const [cfgRes, usersRes] = await Promise.all([
+   530→        fetch("/api/admin/sms-config", { cache: "no-store" }),
+   531→        fetch("/api/users", { cache: "no-store" }),
+   532→      ]);
+   533→      if (cfgRes.ok) {
+   534→        const d = (await cfgRes.json()) as SmsConfigDTO;
+   535→        setConfig(d);
+   536→        setAlertEnabled(!!d.alert?.enabled);
+   537→        setSelectedIds(d.alert?.userIds ?? []);
+   538→        setTemplate(d.alert?.template || DEFAULT_SMS_ALERT_TEMPLATE);
+   539→      }
+   540→      if (usersRes.ok) {
+   541→        const d = await usersRes.json();
+   542→        if (Array.isArray(d?.users)) {
+   543→          // فقط مدیران — صندوقدارها هرگز هشدار مرجوعی نمی‌گیرند
+   544→          setManagers(d.users.filter((u: UserRow) => u.role === "owner" || u.role === "admin"));
+   545→        }
+   546→      }
+   547→    } catch {
+   548→      toast.error("خطا در دریافت تنظیمات هشدار مدیران");
+   549→    } finally {
+   550→      setLoading(false);
+   551→    }
+   552→  }, []);
+   553→
+   554→  useEffect(() => {
+   555→    load();
+   556→  }, [load]);
+   557→
+   558→  function toggleManager(id: string) {
+   559→    setSelectedIds((ids) =>
+   560→      ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]
+   561→    );
+   562→  }
+   563→
+   564→  const selectedManagers = managers.filter((m) => selectedIds.includes(m.id));
+   565→  const managersWithValidPhone = selectedManagers.filter((m) =>
+   566→    isValidIranMobile(m.phone ?? "")
+   567→  );
+   568→
+   569→  // پیش‌نمایش با داده نمونه
+   570→  const preview = renderSmsTemplate(template, {
+   571→    customerName: "مریم احمدی",
+   572→    amountRial: 1_250_000,
+   573→    trackingCode: "HZ-14050712-01",
+   574→    storeName: "هایپر زیتون",
+   575→    cashierName: "آزاده محمدی پور",
+   576→    itemCount: 2,
+   577→    productName: "روغن سرخ‌کردنی ۱ لیتری",
+   578→  });
+   579→  const seg = smsSegments(template);
+   580→
+   581→  async function save() {
+   582→    if (saving) return;
+   583→    if (alertEnabled && selectedIds.length === 0) {
+   584→      toast.error("حداقل یک مدیر برای دریافت هشدار انتخاب کنید");
+   585→      return;
+   586→    }
+   587→    setSaving(true);
+   588→    try {
+   589→      const res = await fetch("/api/admin/sms-config", {
+   590→        method: "PUT",
+   591→        headers: { "Content-Type": "application/json" },
+   592→        body: JSON.stringify({
+   593→          alertEnabled: alertEnabled ? "1" : "0",
+   594→          alertUserIds: selectedIds,
+   595→          alertTemplate: template,
+   596→        }),
+   597→      });
+   598→      const d = await res.json();
+   599→      if (res.ok) {
+   600→        setConfig((c) => (c ? { ...c, alert: d.alert } : c));
+   601→        if (alertEnabled && managersWithValidPhone.length === 0) {
+   602→          toast.warning(
+   603→            "هشدار ذخیره شد اما هیچ‌یک از مدیران انتخاب‌شده شماره موبایل معتبر ندارد — از بخش «کاربران» شماره آنها را تکمیل کنید"
+   604→          );
+   605→        } else {
+   606→          toast.success(
+   607→            alertEnabled
+   608→              ? `هشدار مرجوعی برای ${toFaDigits(managersWithValidPhone.length)} مدیر فعال شد`
+   609→              : "هشدار پیامکی مرجوعی غیرفعال شد"
+   610→          );
+   611→        }
+   612→      } else {
+   613→        toast.error(d.error || "ذخیره تنظیمات هشدار ناموفق بود");
+   614→      }
+   615→    } catch {
+   616→      toast.error("ارتباط با سرور برقرار نشد");
+   617→    } finally {
+   618→      setSaving(false);
+   619→    }
+   620→  }
+   621→
+   622→  if (loading) {
+   623→    return (
+   624→      <Card>
+   625→        <CardContent className="space-y-3 py-6">
+   626→          <Skeleton className="h-6 w-56" />
+   627→          <Skeleton className="h-4 w-full max-w-md" />
+   628→          <Skeleton className="h-24 w-full" />
+   629→        </CardContent>
+   630→      </Card>
+   631→    );
+   632→  }
+   633→
+   634→  return (
+   635→    <Card id="sms-alerts">
+   636→      <CardHeader>
+   637→        <CardTitle className="flex items-center gap-2 text-base">
+   638→          <BellRing className="size-4 text-chart-2" />
+   639→          هشدار پیامکی مرجوعی به مدیران
+   640→          {config?.ready ? (
+   641→            alertEnabled ? (
+   642→              <Badge className="gap-1 border border-chart-2/30 bg-chart-2/10 text-chart-2 text-[10px] mr-auto">
+   643→                <CheckCircle2 className="size-3" />
+   644→                فعال — {toFaDigits(managersWithValidPhone.length)} گیرنده
+   645→              </Badge>
+   646→            ) : (
+   647→              <Badge variant="outline" className="mr-auto text-[10px] text-muted-foreground">
+   648→                غیرفعال
+   649→              </Badge>
+   650→            )
+   651→          ) : (
+   652→            <Badge variant="outline" className="gap-1 mr-auto text-[10px] text-muted-foreground">
+   653→              <TriangleAlert className="size-3" />
+   654→              پنل ناقص
+   655→            </Badge>
+   656→          )}
+   657→        </CardTitle>
+   658→        <CardDescription>
+   659→          وقتی صندوقدار مرجوعی جدیدی ثبت می‌کند، پیامک هشدار به مدیران انتخاب‌شده ارسال می‌شود —
+   660→          مثلاً وقتی آقای نوروزی در مرخصی است و در فروشگاه حضور ندارد.
+   661→        </CardDescription>
+   662→      </CardHeader>
+   663→      <CardContent className="space-y-4">
+   664→        {/* کلید فعال‌سازی */}
+   665→        <div className="flex items-center justify-between gap-3 rounded-xl border bg-muted/30 px-4 py-3">
+   666→          <div className="flex items-center gap-2.5 min-w-0">
+   667→            <Switch
+   668→              id="sms-alert-enabled"
+   669→              checked={alertEnabled}
+   670→              onCheckedChange={setAlertEnabled}
+   671→              disabled={!config?.ready}
+   672→              aria-label="فعال‌سازی هشدار مرجوعی به مدیران"
+   673→            />
+   674→            <Label htmlFor="sms-alert-enabled" className="cursor-pointer text-sm font-semibold">
+   675→              ارسال هشدار هنگام ثبت مرجوعی
+   676→            </Label>
+   677→          </div>
+   678→          <span
+   679→            className={`text-xs font-bold whitespace-nowrap ${
+   680→              alertEnabled ? "text-chart-2" : "text-muted-foreground"
+   681→            }`}
+   682→          >
+   683→            {alertEnabled ? "روشن" : "خاموش"}
+   684→          </span>
+   685→        </div>
+   686→
+   687→        {config && !config.ready && (
+   688→          <p className="text-[11px] leading-6 text-muted-foreground rounded-lg bg-muted/50 border border-dashed px-3 py-2.5">
+   689→            برای استفاده از هشدار مدیران، ابتدا کارت «اتصال پنل پیامک» را کامل کنید
+   690→            {config.missing.length > 0 && <> ({config.missing.join("، ")})</>}.
+   691→          </p>
+   692→        )}
+   693→
+   694→        {alertEnabled && (
+   695→          <>
+   696→            {/* انتخاب مدیران */}
+   697→            <div className="space-y-2">
+   698→              <div className="flex items-center justify-between gap-2">
+   699→                <p className="flex items-center gap-1.5 text-xs font-bold">
+   700→                  <UserCheck className="size-3.5 text-primary" />
+   701→                  مدیرانی که هشدار دریافت می‌کنند
+   702→                </p>
+   703→                <span className="num text-[10px] text-muted-foreground">
+   704→                  {toFaDigits(selectedIds.length)} از {toFaDigits(managers.length)}
+   705→                </span>
+   706→              </div>
+   707→              {managers.length === 0 ? (
+   708→                <p className="text-xs text-muted-foreground rounded-lg border border-dashed px-3 py-3">
+   709→                  حساب مدیریتی دیگری وجود ندارد — مدیران از بخش «کاربران» ایجاد می‌شوند.
+   710→                </p>
+   711→              ) : (
+   712→                <div className="grid gap-2 sm:grid-cols-2">
+   713→                  {managers.map((m) => {
+   714→                    const checked = selectedIds.includes(m.id);
+   715→                    const phoneOk = isValidIranMobile(m.phone ?? "");
+   716→                    return (
+   717→                      <label
+   718→                        key={m.id}
+   719→                        className={cn(
+   720→                          "flex cursor-pointer items-center gap-3 rounded-xl border px-3.5 py-3 transition-colors",
+   721→                          checked
+   722→                            ? "border-chart-2/40 bg-chart-2/5"
+   723→                            : "hover:bg-accent/50"
+   724→                        )}
+   725→                      >
+   726→                        <Checkbox
+   727→                          checked={checked}
+   728→                          onCheckedChange={() => toggleManager(m.id)}
+   729→                          aria-label={`هشدار به ${m.fullName}`}
+   730→                        />
+   731→                        <AvatarBadge fullName={m.fullName} avatar={m.avatar} size="sm" />
+   732→                        <div className="min-w-0 flex-1">
+   733→                          <p className="truncate text-sm font-semibold">{m.fullName}</p>
+   734→                          <p className="text-[10px] text-muted-foreground">
+   735→                            {m.role === "owner" ? "مدیر فروشگاه" : "مدیر ارشد سامانه"}
+   736→                            {" · "}
+   737→                            {m.phone ? (
+   738→                              <span className={cn("num", !phoneOk && "text-destructive")} dir="ltr">
+   739→                                {toFaDigits(m.phone)}
+   740→                              </span>
+   741→                            ) : (
+   742→                              <span className="text-destructive">بدون شماره تماس</span>
+   743→                            )}
+   744→                          </p>
+   745→                        </div>
+   746→                      </label>
+   747→                    );
+   748→                  })}
+   749→                </div>
+   750→              )}
+   751→              {selectedManagers.length > managersWithValidPhone.length && (
+   752→                <p className="flex items-center gap-1.5 text-[11px] text-destructive">
+   753→                  <TriangleAlert className="size-3.5 shrink-0" />
+   754→                  {toFaDigits(selectedManagers.length - managersWithValidPhone.length)} مدیر
+   755→                  انتخاب‌شده شماره موبایل معتبر ندارد و پیامک دریافت نمی‌کند.
+   756→                </p>
+   757→              )}
+   758→            </div>
+   759→
+   760→            {/* متن قالب هشدار */}
+   761→            <div className="space-y-2">
+   762→              <div className="flex items-center justify-between gap-2 flex-wrap">
+   763→                <p className="text-xs font-bold">متن پیام هشدار</p>
+   764→                <span className="num text-[10px] text-muted-foreground">
+   765→                  {toFaDigits(seg.chars)} نویسه — {toFaDigits(seg.parts)} پیامک
+   766→                </span>
+   767→              </div>
+   768→              <Textarea
+   769→                dir="rtl"
+   770→                rows={4}
+   771→                className="text-sm leading-7 resize-y"
+   772→                value={template}
+   773→                maxLength={612}
+   774→                onChange={(e) => setTemplate(e.target.value)}
+   775→              />
+   776→              <div className="flex flex-wrap gap-1.5">
+   777→                {ALERT_PLACEHOLDER_TOKENS.map((t) => (
+   778→                  <button
+   779→                    key={t}
+   780→                    type="button"
+   781→                    className="num rounded-md border border-primary/25 bg-primary/5 px-1.5 py-0.5 text-[10px] font-semibold text-primary transition-colors hover:bg-primary/15"
+   782→                    dir="ltr"
+   783→                    onClick={() => setTemplate((prev) => `${prev}${t}`)}
+   784→                    title={SMS_PLACEHOLDERS.find((p) => p.token === t)?.label ?? ""}
+   785→                  >
+   786→                    {t}
+   787→                  </button>
+   788→                ))}
+   789→              </div>
+   790→              {/* پیش‌نمایش */}
+   791→              <div className="space-y-1.5">
+   792→                <p className="text-[11px] font-bold text-muted-foreground">پیش‌نمایش با داده نمونه:</p>
+   793→                <div className="rounded-xl border border-chart-2/25 bg-chart-2/5 px-3.5 py-3 text-xs leading-6 whitespace-pre-wrap">
+   794→                  {preview}
+   795→                </div>
+   796→              </div>
+   797→            </div>
+   798→          </>
+   799→        )}
+   800→
+   801→        <div className="flex items-center justify-end gap-2 pt-1">
+   802→          <Button onClick={save} disabled={saving} className="gap-1.5 font-semibold">
+   803→            {saving ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
+   804→            ذخیره تنظیمات هشدار
+   805→          </Button>
+   806→        </div>
+   807→      </CardContent>
+   808→    </Card>
+   809→  );
+   810→}
+   811→
+   812→/* ==========================================================================
+   813→   کارت ۳ — قالب‌های پیام (انواع اطلاع‌رسانی)
+   814→   ========================================================================== */
+   815→
+   816→function SmsTemplatesCard({ user }: { user: SessionUser }) {
+   817→  const [templates, setTemplates] = useState<SmsTemplateDTO[] | null>(null);
+   818→  const [editing, setEditing] = useState<SmsTemplateDTO | null>(null);
+   819→  const [creating, setCreating] = useState(false);
+   820→  const [refreshTick, setRefreshTick] = useState(0);
+   821→
+   822→  // بارگذاری قالب‌ها — الگوی promise-chain با پرچم لغو (هم‌ریخت با بقیه سامانه)
+   823→  useEffect(() => {
+   824→    let cancelled = false;
+   825→    fetch("/api/sms/templates", { cache: "no-store" })
+   826→      .then((r) => (r.ok ? r.json() : Promise.reject(new Error("templates"))))
+   827→      .then((d) => {
+   828→        if (!cancelled && Array.isArray(d?.templates)) setTemplates(d.templates);
+   829→      })
+   830→      .catch(() => {
+   831→        if (!cancelled) setTemplates([]);
+   832→      });
+   833→    return () => {
+   834→      cancelled = true;
+   835→    };
+   836→  }, [refreshTick]);
+   837→
+   838→  const reload = () => setRefreshTick((t) => t + 1);
+   839→
+   840→  async function remove(t: SmsTemplateDTO) {
+   841→    if (!confirm(`نوع پیام «${t.title}» حذف شود؟ (تاریخچه ارسال‌های قبلی حفظ می‌شود)`)) return;
+   842→    try {
+   843→      const res = await fetch(`/api/sms/templates/${t.id}`, { method: "DELETE" });
+   844→      const d = await res.json();
+   845→      if (res.ok) {
+   846→        toast.success(`نوع پیام «${t.title}» حذف شد`);
+   847→        reload();
+   848→      } else {
+   849→        toast.error(d.error || "حذف ناموفق بود");
+   850→      }
+   851→    } catch {
+   852→      toast.error("ارتباط با سرور برقرار نشد");
+   853→    }
+   854→  }
+   855→
+   856→  return (
+   857→    <Card>
+   858→      <CardHeader className="pb-3">
+   859→        <CardTitle className="flex items-center gap-2 flex-wrap text-base">
+   860→          <MessageCircle className="size-5 text-primary" />
+   861→          قالب‌های پیام (انواع اطلاع‌رسانی)
+   862→          {templates && (
+   863→            <Badge variant="outline" className="num text-[10px]">
+   864→              {toFaDigits(templates.length)} نوع
+   865→            </Badge>
+   866→          )}
+   867→          <Button
+   868→            variant="secondary"
+   869→            size="sm"
+   870→            className="gap-1.5 mr-auto h-9"
+   871→            onClick={() => setCreating(true)}
+   872→          >
+   873→            <Plus className="size-4" />
+   874→            نوع جدید
+   875→          </Button>
+   876→        </CardTitle>
+   877→        <CardDescription className="leading-6">
+   878→          انواع پیش‌فرض: مرجوعی کالا، اختلاف قیمت فاکتور با قیمت روی کالا، خطای کارت‌خوان صندوقدار
+   879→          و سایر موارد — {user.fullName} می‌تواند انواع دلخواه دیگری هم تعریف کند. هنگام ثبت
+   880→          پرداخت، نوع پیام انتخاب و متن آن (در صورت تمایل) ویرایش می‌شود.
+   881→        </CardDescription>
+   882→      </CardHeader>
+   883→      <CardContent>
+   884→        {!templates ? (
+   885→          <div className="space-y-3">
+   886→            <Skeleton className="h-24 w-full" />
+   887→            <Skeleton className="h-24 w-full" />
+   888→          </div>
+   889→        ) : templates.length === 0 ? (
+   890→          <p className="text-sm text-muted-foreground text-center py-8">
+   891→            هنوز قالبی تعریف نشده است — «نوع جدید» را بزنید
+   892→          </p>
+   893→        ) : (
+   894→          <div className="grid gap-3 md:grid-cols-2">
+   895→            {templates.map((t, i) => {
+   896→              const seg = smsSegments(t.body);
+   897→              return (
+   898→                <motion.div
+   899→                  key={t.id}
+   900→                  initial={{ opacity: 0, y: 10 }}
+   901→                  animate={{ opacity: 1, y: 0 }}
+   902→                  transition={{ delay: Math.min(i * 0.04, 0.3) }}
+   903→                  className={cn(
+   904→                    "rounded-xl border p-4 space-y-2.5",
+   905→                    t.isActive ? "bg-card" : "bg-muted/40 opacity-70"
+   906→                  )}
+   907→                >
+   908→                  <div className="flex items-center justify-between gap-2 flex-wrap">
+   909→                    <p className="font-bold text-sm flex items-center gap-1.5">
+   910→                      <MessageCircle className="size-4 text-primary" />
+   911→                      {t.title}
+   912→                    </p>
+   913→                    <div className="flex items-center gap-1.5">
+   914→                      <Badge variant="outline" className="num text-[10px]">
+   915→                        {toFaDigits(seg.chars)} نویسه · {toFaDigits(seg.parts)} پیامک
+   916→                      </Badge>
+   917→                      <Button
+   918→                        variant="ghost"
+   919→                        size="icon"
+   920→                        className="size-7"
+   921→                        onClick={() => setEditing(t)}
+   922→                        aria-label={`ویرایش ${t.title}`}
+   923→                      >
+   924→                        <Pencil className="size-3.5" />
+   925→                      </Button>
+   926→                      <Button
+   927→                        variant="ghost"
+   928→                        size="icon"
+   929→                        className="size-7 text-destructive hover:text-destructive"
+   930→                        onClick={() => remove(t)}
+   931→                        aria-label={`حذف ${t.title}`}
+   932→                      >
+   933→                        <Trash2 className="size-3.5" />
+   934→                      </Button>
+   935→                    </div>
+   936→                  </div>
+   937→                  <p className="text-xs leading-6 text-muted-foreground whitespace-pre-wrap break-words min-h-11">
+   938→                    {t.body}
+   939→                  </p>
+   940→                  {!t.isActive && (
+   941→                    <Badge variant="secondary" className="text-[10px]">غیرفعال</Badge>
+   942→                  )}
+   943→                </motion.div>
+   944→              );
+   945→            })}
+   946→          </div>
+   947→        )}
+   948→      </CardContent>
+   949→
+   950→      {/* پنجره افزودن/ویرایش قالب */}
+   951→      <SmsTemplateDialog
+   952→        open={creating || !!editing}
+   953→        target={editing}
+   954→        onClose={() => {
+   955→          setCreating(false);
+   956→          setEditing(null);
+   957→        }}
+   958→        onSaved={() => {
+   959→          setCreating(false);
+   960→          setEditing(null);
+   961→          reload();
+   962→        }}
+   963→      />
+   964→    </Card>
+   965→  );
+   966→}
+   967→
+   968→/** پنجره افزودن/ویرایش قالب پیام */
+   969→function SmsTemplateDialog({
+   970→  open,
+   971→  target,
+   972→  onClose,
+   973→  onSaved,
+   974→}: {
+   975→  open: boolean;
+   976→  target: SmsTemplateDTO | null;
+   977→  onClose: () => void;
+   978→  onSaved: () => void;
+   979→}) {
+   980→  const [title, setTitle] = useState("");
+   981→  const [body, setBody] = useState("");
+   982→  const [isActive, setIsActive] = useState(true);
+   983→  const [saving, setSaving] = useState(false);
+   984→  const [error, setError] = useState<string | null>(null);
+   985→
+   986→  useEffect(() => {
+   987→    if (open) {
+   988→      setTitle(target?.title ?? "");
+   989→      setBody(target?.body ?? "");
+   990→      setIsActive(target?.isActive ?? true);
+   991→      setError(null);
+   992→    }
+   993→  }, [open, target]);
+   994→
+   995→  const seg = smsSegments(body);
+   996→
+   997→  async function save() {
+   998→    if (saving) return;
+   999→    const t = title.trim();
+  1000→    const b = body.trim();
+  1001→    if (t.length < 2) {
+  1002→      setError("نام نوع پیام حداقل ۲ نویسه باشد");
+  1003→      return;
+  1004→    }
+  1005→    if ([...b].length < 5) {
+  1006→      setError("متن پیام حداقل ۵ نویسه باشد");
+  1007→      return;
+  1008→    }
+  1009→    setSaving(true);
+  1010→    try {
+  1011→      const res = await fetch(
+  1012→        target ? `/api/sms/templates/${target.id}` : "/api/sms/templates",
+  1013→        {
+  1014→          method: target ? "PATCH" : "POST",
+  1015→          headers: { "Content-Type": "application/json" },
+  1016→          body: JSON.stringify({ title: t, body: b, isActive }),
+  1017→        }
+  1018→      );
+  1019→      const d = await res.json();
+  1020→      if (res.ok) {
+  1021→        toast.success(target ? "قالب پیام ویرایش شد" : "نوع پیام جدید تعریف شد");
+  1022→        onSaved();
+  1023→      } else {
+  1024→        setError(d.error || "خطا در ذخیره قالب");
+  1025→      }
+  1026→    } catch {
+  1027→      setError("ارتباط با سرور برقرار نشد");
+  1028→    } finally {
+  1029→      setSaving(false);
+  1030→    }
+  1031→  }
+  1032→
+  1033→  return (
+  1034→    <Dialog open={open} onOpenChange={(o) => !saving && !o && onClose()}>
+  1035→      <DialogContent dir="rtl" className="w-[calc(100vw-1.5rem)] sm:max-w-lg max-h-[calc(100dvh-2rem)] overflow-y-auto">
+  1036→        <DialogHeader>
+  1037→          <DialogTitle className="flex items-center gap-2">
+  1038→            <MessageCircle className="size-5 text-primary" />
+  1039→            {target ? `ویرایش قالب «${target.title}»` : "تعریف نوع پیام جدید"}
+  1040→          </DialogTitle>
+  1041→          <DialogDescription>
+  1042→            {target
+  1043→              ? "متن و نام نوع پیام را ویرایش کنید."
+  1044→              : "نوع پیام جدیدی برای اطلاع‌رسانی به مشتریان تعریف کنید (مثلاً «کالای معیوب» یا «بازپرداخت اقساط»)."}
+  1045→          </DialogDescription>
+  1046→        </DialogHeader>
+  1047→
+  1048→        <div className="space-y-4">
+  1049→          <div className="space-y-2">
+  1050→            <Label htmlFor="tpl-title">نام نوع پیام</Label>
+  1051→            <Input
+  1052→              id="tpl-title"
+  1053→              className="h-11"
+  1054→              placeholder="مثلاً: مرجوعی کالا"
+  1055→              value={title}
+  1056→              maxLength={60}
+  1057→              onChange={(e) => setTitle(e.target.value)}
+  1058→            />
+  1059→          </div>
+  1060→
+  1061→          <div className="space-y-2">
+  1062→            <div className="flex items-center justify-between gap-2">
+  1063→              <Label htmlFor="tpl-body">متن پیام</Label>
+  1064→              {body && (
+  1065→                <span className="num text-[10px] text-muted-foreground">
+  1066→                  {toFaDigits(seg.chars)} نویسه — {toFaDigits(seg.parts)} پیامک
+  1067→                </span>
+  1068→              )}
+  1069→            </div>
+  1070→            <Textarea
+  1071→              id="tpl-body"
+  1072→              dir="rtl"
+  1073→              rows={5}
+  1074→              className="text-sm leading-7"
+  1075→              placeholder="{{مشتری}} عزیز، … "
+  1076→              value={body}
+  1077→              maxLength={612}
+  1078→              onChange={(e) => setBody(e.target.value)}
+  1079→            />
+  1080→            <div className="rounded-lg bg-muted/50 border border-dashed px-3 py-2.5 space-y-1.5">
+  1081→              <p className="text-[10px] font-bold text-muted-foreground">جای‌نگهدارهای قابل استفاده:</p>
+  1082→              <div className="flex flex-wrap gap-1.5">
+  1083→                {SMS_PLACEHOLDERS.map((p) => (
+  1084→                  <button
+  1085→                    key={p.token}
+  1086→                    type="button"
+  1087→                    title={p.label}
+  1088→                    onClick={() => setBody((b) => (b ? b + " " : "") + p.token)}
+  1089→                    className="num text-[10px] rounded-md border bg-card px-2 py-1 hover:bg-accent transition-colors"
+  1090→                    dir="ltr"
+  1091→                  >
+  1092→                    {p.token}
+  1093→                  </button>
+  1094→                ))}
+  1095→              </div>
+  1096→              <p className="text-[10px] text-muted-foreground leading-5">
+  1097→                با کلیک روی هر جای‌نگهدار به متن افزوده می‌شود؛ هنگام ارسال با داده واقعی مشتری
+  1098→                جای‌گزین می‌گردد.
+  1099→              </p>
+  1100→            </div>
+  1101→          </div>
+  1102→
+  1103→          {target && (
+  1104→            <div className="flex items-center justify-between gap-3 rounded-xl border bg-muted/40 px-4 py-3">
+  1105→              <p className="text-sm font-semibold">قالب فعال باشد؟</p>
+  1106→              <Switch checked={isActive} onCheckedChange={setIsActive} aria-label="فعال‌بودن قالب" />
+  1107→            </div>
+  1108→          )}
+  1109→
+  1110→          {error && <p className="text-xs text-destructive">{error}</p>}
+  1111→        </div>
+  1112→
+  1113→        <DialogFooter className="gap-2">
+  1114→          <Button variant="outline" onClick={onClose} disabled={saving}>
+  1115→            انصراف
+  1116→          </Button>
+  1117→          <Button onClick={save} disabled={saving} className="gap-1.5">
+  1118→            {saving && <Loader2 className="size-4 animate-spin" />}
+  1119→            {target ? "ذخیره تغییرات" : "ایجاد قالب"}
+  1120→          </Button>
+  1121→        </DialogFooter>
+  1122→      </DialogContent>
+  1123→    </Dialog>
+  1124→  );
+  1125→}
+  1126→
+  1127→/* ==========================================================================
+  1128→   کارت ۴ — تاریخچه ارسال
+  1129→   ========================================================================== */
+  1130→
+  1131→function SmsLogsCard() {
+  1132→  const [logs, setLogs] = useState<SmsLogRow[] | null>(null);
+  1133→  const [loading, setLoading] = useState(true);
+  1134→  const [refreshTick, setRefreshTick] = useState(0);
+  1135→
+  1136→  // بارگذاری تاریخچه — الگوی promise-chain با پرچم لغو
+  1137→  useEffect(() => {
+  1138→    let cancelled = false;
+  1139→    fetch("/api/sms/logs?limit=50", { cache: "no-store" })
+  1140→      .then((r) => (r.ok ? r.json() : Promise.reject(new Error("logs"))))
+  1141→      .then((d) => {
+  1142→        if (!cancelled && Array.isArray(d?.logs)) setLogs(d.logs);
+  1143→      })
+  1144→      .catch(() => {
+  1145→        if (!cancelled) setLogs([]);
+  1146→      })
+  1147→      .finally(() => {
+  1148→        if (!cancelled) setLoading(false);
+  1149→      });
+  1150→    return () => {
+  1151→      cancelled = true;
+  1152→    };
+  1153→  }, [refreshTick]);
+  1154→
+  1155→  const reload = () => {
+  1156→    setLoading(true);
+  1157→    setRefreshTick((t) => t + 1);
+  1158→  };
+  1159→
+  1160→  return (
+  1161→    <Card>
+  1162→      <CardHeader className="pb-3">
+  1163→        <CardTitle className="flex items-center gap-2 flex-wrap text-base">
+  1164→          <Send className="size-5 text-primary" />
+  1165→          تاریخچه ارسال پیامک
+  1166→          {logs && (
+  1167→            <Badge variant="outline" className="num text-[10px]">
+  1168→              {toFaDigits(logs.length)} ارسال اخیر
+  1169→            </Badge>
+  1170→          )}
+  1171→          <Button
+  1172→            variant="ghost"
+  1173→            size="icon"
+  1174→            className="size-8 mr-auto"
+  1175→            onClick={reload}
+  1176→            aria-label="بازخوانی تاریخچه"
+  1177→          >
+  1178→            <RefreshCw className="size-4" />
+  1179→          </Button>
+  1180→        </CardTitle>
+  1181→        <CardDescription className="leading-6">
+  1182→          آخرین پیامک‌های ارسال‌شده به مشتریان — وضعیت ارسال، پنل و متن هر پیام
+  1183→        </CardDescription>
+  1184→      </CardHeader>
+  1185→      <CardContent>
+  1186→        {loading || !logs ? (
+  1187→          <div className="space-y-3">
+  1188→            <Skeleton className="h-16 w-full" />
+  1189→            <Skeleton className="h-16 w-full" />
+  1190→            <Skeleton className="h-16 w-full" />
+  1191→          </div>
+  1192→        ) : logs.length === 0 ? (
+  1193→          <p className="text-sm text-muted-foreground text-center py-8">
+  1194→            هنوز پیامکی ارسال نشده است — پس از اولین ثبت پرداخت با پیامک، اینجا نمایش داده می‌شود
+  1195→          </p>
+  1196→        ) : (
+  1197→          <div className="max-h-96 overflow-y-auto space-y-2.5 pr-1 custom-scroll" dir="rtl">
+  1198→            {logs.map((l) => (
+  1199→              <div
+  1200→                key={l.id}
+  1201→                className={cn(
+  1202→                  "rounded-xl border p-3.5 space-y-2",
+  1203→                  l.status === "sent" ? "border-primary/20 bg-primary/[0.03]" : "border-destructive/30 bg-destructive/5"
+  1204→                )}
+  1205→              >
+  1206→                <div className="flex items-center justify-between gap-2 flex-wrap text-[11px]">
+  1207→                  <span className="flex items-center gap-1.5 flex-wrap">
+  1208→                    {l.status === "sent" ? (
+  1209→                      <Badge className="gap-1 border border-primary/30 bg-primary/10 text-primary text-[10px]">
+  1210→                        <CheckCircle2 className="size-3" />
+  1211→                        ارسال شد
+  1212→                      </Badge>
+  1213→                    ) : (
+  1214→                      <Badge variant="destructive" className="gap-1 text-[10px]">
+  1215→                        <TriangleAlert className="size-3" />
+  1216→                        ناموفق
+  1217→                      </Badge>
+  1218→                    )}
+  1219→                    {l.templateTitle && (
+  1220→                      <Badge variant="secondary" className="text-[10px]">{l.templateTitle}</Badge>
+  1221→                    )}
+  1222→                    {l.amount != null && l.amount > 0 && (
+  1223→                      <span className="num text-muted-foreground">{formatMoney(l.amount)} ریال</span>
+  1224→                    )}
+  1225→                  </span>
+  1226→                  <span className="num text-muted-foreground flex items-center gap-1.5" dir="ltr">
+  1227→                    {toFaDigits(l.phone)}
+  1228→                  </span>
+  1229→                </div>
+  1230→                <p className="text-xs leading-6 text-muted-foreground whitespace-pre-wrap break-words">
+  1231→                  {l.message}
+  1232→                </p>
+  1233→                <div className="flex items-center justify-between gap-2 flex-wrap text-[10px] text-muted-foreground">
+  1234→                  <span className="num">{formatJalaliDateTime(new Date(l.createdAt))}</span>
+  1235→                  <span className="flex items-center gap-2 flex-wrap">
+  1236→                    {l.customerName && <span>{l.customerName}</span>}
+  1237→                    {l.requestCode && <span className="num" dir="ltr">{l.requestCode}</span>}
+  1238→                    {l.provider && <span>پنل: {l.provider}</span>}
+  1239→                  </span>
+  1240→                </div>
+  1241→                {l.error && (
+  1242→                  <p className="text-[10px] text-destructive break-words">خطا: {l.error}</p>
+  1243→                )}
+  1244→              </div>
+  1245→            ))}
+  1246→          </div>
+  1247→        )}
+  1248→      </CardContent>
+  1249→    </Card>
+  1250→  );
+  1251→}
+  1252→
